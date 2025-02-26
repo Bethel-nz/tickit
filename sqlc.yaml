@@ -1,0 +1,19 @@
+version: "2"
+cloud:
+    organization: ""
+    project: ""
+    hostname: ""
+servers: []
+sql:
+    - schema: "internal/database/migrations/"
+      queries: "internal/database/queries/"
+      engine: "postgresql"
+      gen:
+          go:
+              package: "store"
+              out: "internal/database/store"
+              sql_package: "pgx/v5"
+
+plugins: []
+rules: []
+options: {}
