@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Bethel-nz/tickit/internal/store" // SQLC-generated store
-	"github.com/Bethel-nz/tickit/internal/types" // Unified configuration
-	"github.com/go-redis/redis/v8"               // Redis client
-	"github.com/jackc/pgx/v5/pgxpool"            // PGX connection pool
+	"github.com/Bethel-nz/tickit/internal/database/store"
+	"github.com/Bethel-nz/tickit/internal/types"
+	"github.com/go-redis/redis/v8"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Application holds application-wide dependencies and configuration.
