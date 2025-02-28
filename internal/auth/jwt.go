@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Bethel-nz/tickit/internal/env"
 	"github.com/golang-jwt/jwt/v4"
 )
 
 const (
-	secretKey = "your-secure-secret-key"
+	secretKey = env.String("TICKIT_JWT_KEY", "", env.Required)
 )
 
 type Claims struct {
