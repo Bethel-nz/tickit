@@ -23,3 +23,5 @@ export MAX_OPEN_CONNS="25"
 
 # Maximum idle time for database connections (e.g., 5 minutes)
 export MAX_IDLE_TIME="5m"
+
+export TICKIT_JWT_KEY="your jwt key"
