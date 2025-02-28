@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Bethel-nz/tickit/app/router"
 	"github.com/Bethel-nz/tickit/internal/database/store"
 	"github.com/Bethel-nz/tickit/internal/types"
 	"github.com/go-redis/redis/v8"
@@ -74,30 +75,19 @@ func (app *Application) Use(middleware ...func(http.Handler) http.Handler) *Appl
 }
 
 // WithMux registers application routes defined in a RouterGroup.
-func (app *Application) WithMux(routes *RouterGroup) *Application {
-	app.Mux = http.NewServeMux()
+func (app *Application) WithMux(routes *router.RouterGroup) *Application {
+	// Use the ServeMux from the router package
+	app.Mux = router.ServeMux(routes)
 
-	// Register all routes from the router group.
-	allRoutes := routes.Build()
-	for _, route := range allRoutes {
-		pattern := route.Method + " " + route.Path
-
-		var next http.Handler = route.Handler
-		// Apply route-specific middleware first
-		for i := len(route.Middleware) - 1; i >= 0; i-- {
-			next = route.Middleware[i](next)
-		}
-
-		// Apply global middleware
-		for i := len(app.GlobalMiddleware) - 1; i >= 0; i-- {
-			next = app.GlobalMiddleware[i](next)
-		}
-
-		app.Mux.HandleFunc(pattern, next.ServeHTTP)
+	// Wrap the ServeMux with global middleware
+	handler := http.Handler(app.Mux)
+	for i := len(app.GlobalMiddleware) - 1; i >= 0; i-- {
+		handler = app.GlobalMiddleware[i](handler)
 	}
 
-	// Add a health-check endpoint
-	app.Mux.HandleFunc("GET /health", app.healthCheckHandler)
+	// Update the Mux to the wrapped handler
+	app.Mux = http.NewServeMux()
+	app.Mux.Handle("/", handler)
 
 	return app
 }
