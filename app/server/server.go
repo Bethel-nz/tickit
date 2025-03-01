@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ type Application struct {
 	Store            *store.Queries
 	Cache            *redis.Client
 	GlobalMiddleware []func(http.Handler) http.Handler
+	tlsConfig        *tls.Config // New field for TLS configuration
 }
 
 // NewApplication creates a new instance of Application with default middleware.
@@ -35,11 +37,9 @@ func NewApplication() *Application {
 }
 
 // WithConfig initializes the application with the unified configuration.
-// It creates the PGX pool, instantiates the store, and sets up Redis.
 func (app *Application) WithConfig(cfg *types.AppConfig) *Application {
 	app.Config = cfg
 
-	// Create PGX pool using the DSN and configuration from AppConfig
 	ctx := context.Background()
 	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
@@ -76,29 +76,34 @@ func (app *Application) Use(middleware ...func(http.Handler) http.Handler) *Appl
 
 // WithMux registers application routes defined in a RouterGroup.
 func (app *Application) WithMux(routes *router.RouterGroup) *Application {
-	// Use the ServeMux from the router package
 	app.Mux = router.ServeMux(routes)
 
-	// Wrap the ServeMux with global middleware
 	handler := http.Handler(app.Mux)
 	for i := len(app.GlobalMiddleware) - 1; i >= 0; i-- {
 		handler = app.GlobalMiddleware[i](handler)
 	}
 
-	// Update the Mux to the wrapped handler
 	app.Mux = http.NewServeMux()
 	app.Mux.Handle("/", handler)
 
 	return app
 }
 
-// healthCheckHandler responds with a simple "OK" message.
-func (app *Application) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+// TLSServer represents an Application configured with TLS, restricting chaining to Serve.
+type TLSServer struct {
+	app *Application
+}
+
+// WithTLS configures the application to use TLS with the provided tls.Config.
+// It returns a TLSServer, which can only chain with Serve.
+func (app *Application) WithTLS(cfg *tls.Config) *TLSServer {
+	app.tlsConfig = cfg
+	return &TLSServer{app: app}
 }
 
 // Serve starts the HTTP server and gracefully shuts it down on interrupt signals.
+// When called on Application, it starts an HTTP server.
+// When called on TLSServer, it starts an HTTPS server with TLS.
 func (app *Application) Serve() error {
 	server := &http.Server{
 		Addr:         ":" + strconv.Itoa(app.Config.AppPort),
@@ -107,10 +112,22 @@ func (app *Application) Serve() error {
 		WriteTimeout: 30 * time.Second,
 	}
 
+	// If tlsConfig is set, use it; otherwise, default to HTTP
+	if app.tlsConfig != nil {
+		server.TLSConfig = app.tlsConfig
+	}
+
 	errChan := make(chan error, 1)
 	go func() {
-		log.Printf("Server starting on http://localhost:%d", app.Config.AppPort)
-		errChan <- server.ListenAndServe()
+		if app.tlsConfig != nil {
+			log.Printf("Server starting with TLS on https://localhost:%d", app.Config.AppPort)
+			// Since tlsConfig is provided, use ListenAndServeTLS with empty cert/key files
+			// (assumes certificates are loaded in tlsConfig)
+			errChan <- server.ListenAndServeTLS("", "")
+		} else {
+			log.Printf("Server starting on http://localhost:%d", app.Config.AppPort)
+			errChan <- server.ListenAndServe()
+		}
 	}()
 
 	quit := make(chan os.Signal, 1)
@@ -143,4 +160,9 @@ func (app *Application) Serve() error {
 	}
 
 	return nil
+}
+
+// Serve for TLSServer ensures TLS is used (reuses Application's Serve logic).
+func (ts *TLSServer) Serve() error {
+	return ts.app.Serve()
 }
