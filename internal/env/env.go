@@ -23,7 +23,7 @@ type Env[T any] struct {
 func (e Env[T]) Get() T {
 	value, exists := os.LookupEnv(e.Key)
 
-	if !exists && e.Required {
+	if !exists && bool(e.Required) {
 		panic("Required environment variable " + e.Key + " is not set")
 	}
 
@@ -39,7 +39,7 @@ func (e Env[T]) Get() T {
 		if v, err := strconv.Atoi(value); err == nil {
 			result = any(v).(T)
 		} else {
-			if e.Required {
+			if bool(e.Required) {
 				panic("Failed to convert environment variable " + e.Key + " to int: " + err.Error())
 			}
 			result = e.Fallback
@@ -48,7 +48,7 @@ func (e Env[T]) Get() T {
 		if v, err := strconv.ParseBool(value); err == nil {
 			result = any(v).(T)
 		} else {
-			if e.Required {
+			if bool(e.Required) {
 				panic("Failed to convert environment variable " + e.Key + " to bool: " + err.Error())
 			}
 			result = e.Fallback
@@ -57,7 +57,7 @@ func (e Env[T]) Get() T {
 		if v, err := time.ParseDuration(value); err == nil {
 			result = any(v).(T)
 		} else {
-			if e.Required {
+			if bool(e.Required) {
 				panic("Failed to convert environment variable " + e.Key + " to duration: " + err.Error())
 			}
 			result = e.Fallback
@@ -66,13 +66,13 @@ func (e Env[T]) Get() T {
 		if v, err := strconv.ParseFloat(value, 64); err == nil {
 			result = any(v).(T)
 		} else {
-			if e.Required {
+			if bool(e.Required) {
 				panic("Failed to convert environment variable " + e.Key + " to float64: " + err.Error())
 			}
 			result = e.Fallback
 		}
 	default:
-		if e.Required {
+		if bool(e.Required) {
 			panic("Unsupported type for environment variable " + e.Key)
 		}
 		result = e.Fallback
