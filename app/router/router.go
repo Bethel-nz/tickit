@@ -1,91 +1,86 @@
 package router
 
 import (
-	"context"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
 )
 
-// Pattern represents a route pattern with segments
-type Pattern struct {
-	segments []string // Each segment is either a literal or a parameter (e.g., ":id")
+// Context wraps http.ResponseWriter and *http.Request with additional utilities
+type Context struct {
+	http.ResponseWriter
+	Request *http.Request
+	Params  map[string]string
+	path    string // store the matched path pattern
 }
 
-// NewPattern creates a new Pattern from a path string
+// Param returns a route parameter by key
+func (c *Context) Param(key string) string {
+	return c.Params[key]
+}
+
+// Query returns a query parameter by key
+func (c *Context) Query(key string) string {
+	return c.Request.URL.Query().Get(key)
+}
+
+// JSON sends a JSON response with the specified status code and data
+func (c *Context) JSON(status int, v interface{}) {
+	c.Header().Set("Content-Type", "application/json")
+	c.WriteHeader(status)
+	if err := json.NewEncoder(c).Encode(v); err != nil {
+		http.Error(c, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// Pattern represents a route pattern split into segments
+type Pattern struct {
+	segments []string
+}
+
+// NewPattern creates a Pattern from a path string
 func NewPattern(path string) *Pattern {
-	segments := strings.Split(path, "/")
-	var cleaned []string
-	for _, seg := range segments {
-		if seg != "" { // Remove empty segments from leading/trailing slashes
-			cleaned = append(cleaned, seg)
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) == 1 && segments[0] == "" {
+		segments = []string{}
+	}
+	return &Pattern{segments: segments}
+}
+
+// ParamNames extracts parameter names from the pattern
+func (p *Pattern) ParamNames() []string {
+	var names []string
+	for _, seg := range p.segments {
+		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
+			names = append(names, strings.Trim(seg, "{}"))
 		}
 	}
-	return &Pattern{segments: cleaned}
+	return names
 }
 
-// LiteralCount returns the number of literal (non-parameter) segments
+// LiteralCount returns the number of non-parameter segments for sorting precedence
 func (p *Pattern) LiteralCount() int {
 	count := 0
 	for _, seg := range p.segments {
-		if !strings.HasPrefix(seg, ":") {
+		if !strings.HasPrefix(seg, "{") {
 			count++
 		}
 	}
 	return count
 }
 
-// Route represents a single HTTP route with its handler and middleware
+// Route defines a single route
 type Route struct {
 	Method     string
-	Path       string // Original path for reference
+	Path       string
 	Pattern    *Pattern
-	Handler    http.HandlerFunc
+	Handler    func(*Context)
 	Middleware []func(http.Handler) http.Handler
+	paramNames []string
 }
 
-// Match checks if the route matches the given method and path
-func (p *Pattern) Match(reqPath string) (bool, map[string]string) {
-	reqSegments := strings.Split(reqPath, "/")
-	var cleanedReq []string
-	for _, seg := range reqSegments {
-		if seg != "" {
-			cleanedReq = append(cleanedReq, seg)
-		}
-	}
-
-	params := make(map[string]string)
-	pi, ri := 0, 0
-
-	for pi < len(p.segments) && ri < len(cleanedReq) {
-		seg := p.segments[pi]
-
-		if strings.HasPrefix(seg, ":") && strings.HasSuffix(seg, "*") {
-			// Wildcard parameter (e.g., ":path*")
-			paramName := seg[1 : len(seg)-1]
-			params[paramName] = strings.Join(cleanedReq[ri:], "/")
-			return true, params
-		} else if strings.HasPrefix(seg, ":") {
-			// Regular parameter
-			paramName := seg[1:]
-			params[paramName] = cleanedReq[ri]
-			pi++
-			ri++
-		} else if seg == cleanedReq[ri] {
-			// Exact match
-			pi++
-			ri++
-		} else {
-			// Mismatch
-			return false, nil
-		}
-	}
-
-	// Check if all segments matched
-	return pi == len(p.segments) && ri == len(cleanedReq), params
-}
-
-// RouterGroup represents a group of routes with a common path prefix and middleware
+// RouterGroup holds routes and subgroups with a common prefix
 type RouterGroup struct {
 	prefix     string
 	middleware []func(http.Handler) http.Handler
@@ -93,8 +88,8 @@ type RouterGroup struct {
 	groups     []*RouterGroup
 }
 
-// NewRoutes creates a new root router group
-func NewRoutes() *RouterGroup {
+// NewRouter initializes a root router group
+func NewRouter() *RouterGroup {
 	return &RouterGroup{
 		prefix:     "",
 		middleware: []func(http.Handler) http.Handler{},
@@ -103,143 +98,252 @@ func NewRoutes() *RouterGroup {
 	}
 }
 
-// In the RouterGroup struct, change the Group method:
+// Group creates a subgroup with a prefix and optional middleware
 func (rg *RouterGroup) Group(prefix string, middleware ...func(http.Handler) http.Handler) *RouterGroup {
-	if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
+	fullPrefix := strings.TrimRight(rg.prefix, "/") + "/" + strings.TrimLeft(prefix, "/")
+	if fullPrefix == "/" {
+		fullPrefix = ""
 	}
-
-	// Use proper path joining
-	fullPrefix := rg.prefix + prefix
-	if rg.prefix != "" && strings.HasSuffix(rg.prefix, "/") {
-		fullPrefix = rg.prefix + strings.TrimPrefix(prefix, "/")
-	}
-
 	group := &RouterGroup{
-		prefix:     fullPrefix, // Replace path.Join with manual handling
+		prefix:     fullPrefix,
 		middleware: append([]func(http.Handler) http.Handler{}, middleware...),
 		routes:     []Route{},
 		groups:     []*RouterGroup{},
 	}
-
 	rg.groups = append(rg.groups, group)
 	return group
 }
 
-// And in the Handle method:
-func (rg *RouterGroup) Handle(method, path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) *RouterGroup {
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
+// Handle registers a route with a method, path, handler, and optional middleware
+func (rg *RouterGroup) Handle(method, path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
+	fullPath := strings.TrimRight(rg.prefix, "/") + "/" + strings.TrimLeft(path, "/")
+	if fullPath == "/" {
+		fullPath = ""
 	}
-
-	// Manual path concatenation instead of path.Join
-	fullPath := rg.prefix + path
-	if rg.prefix != "" && strings.HasSuffix(rg.prefix, "/") {
-		fullPath = rg.prefix + strings.TrimPrefix(path, "/")
-	}
-
+	pattern := NewPattern(fullPath)
 	route := Route{
 		Method:     method,
 		Path:       fullPath,
-		Pattern:    NewPattern(fullPath),
+		Pattern:    pattern,
 		Handler:    handler,
 		Middleware: middleware,
+		paramNames: pattern.ParamNames(),
 	}
-
 	rg.routes = append(rg.routes, route)
 	return rg
 }
 
-// GET is a shorthand for Handle("GET", path, handler, middleware...)
-func (rg *RouterGroup) GET(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) *RouterGroup {
+// HTTP Method Helpers
+func (rg *RouterGroup) GET(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("GET", path, handler, middleware...)
 }
 
-// POST is a shorthand for Handle("POST", path, handler, middleware...)
-func (rg *RouterGroup) POST(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) *RouterGroup {
+func (rg *RouterGroup) POST(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("POST", path, handler, middleware...)
 }
 
-// PUT is a shorthand for Handle("PUT", path, handler, middleware...)
-func (rg *RouterGroup) PUT(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) *RouterGroup {
+func (rg *RouterGroup) PUT(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("PUT", path, handler, middleware...)
 }
 
-// DELETE is a shorthand for Handle("DELETE", path, handler, middleware...)
-func (rg *RouterGroup) DELETE(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) *RouterGroup {
+func (rg *RouterGroup) DELETE(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("DELETE", path, handler, middleware...)
 }
 
-// PATCH is a shorthand for Handle("PATCH", path, handler, middleware...)
-func (rg *RouterGroup) PATCH(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) *RouterGroup {
+func (rg *RouterGroup) PATCH(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("PATCH", path, handler, middleware...)
 }
 
-func (r *Route) Match(method, path string) (bool, map[string]string) {
-	if r.Method != method {
-		return false, nil
-	}
-	return r.Pattern.Match(path)
+// TrieNode represents a node in the trie structure
+type TrieNode struct {
+	staticChildren map[string]*TrieNode
+	paramChild     *TrieNode
+	routes         map[string]*Route
 }
 
-// buildRoutes recursively builds a flat list of all routes in the group and its subgroups
+// Trie manages the trie structure for route matching
+type Trie struct {
+	root *TrieNode
+}
+
+// NewTrie initializes a new Trie
+func NewTrie() *Trie {
+	return &Trie{
+		root: &TrieNode{
+			staticChildren: make(map[string]*TrieNode),
+			routes:         make(map[string]*Route),
+		},
+	}
+}
+
+// Insert adds a route to the trie
+func (t *Trie) Insert(route *Route) {
+	node := t.root
+	for _, seg := range route.Pattern.segments {
+		isParam := strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")
+		if isParam {
+			if node.paramChild == nil {
+				node.paramChild = &TrieNode{
+					staticChildren: make(map[string]*TrieNode),
+					routes:         make(map[string]*Route),
+				}
+			}
+			node = node.paramChild
+		} else {
+			if node.staticChildren == nil {
+				node.staticChildren = make(map[string]*TrieNode)
+			}
+			if child, ok := node.staticChildren[seg]; !ok {
+				child = &TrieNode{
+					staticChildren: make(map[string]*TrieNode),
+					routes:         make(map[string]*Route),
+				}
+				node.staticChildren[seg] = child
+				node = child
+			}
+		}
+	}
+	node.routes[route.Method] = route
+}
+
+// Match finds a matching route for a method and path
+func (t *Trie) Match(method, path string) (*Route, []string, bool) {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if path == "/" && len(segments) == 1 && segments[0] == "" {
+		segments = []string{}
+	}
+
+	// Special case for root path
+	if len(segments) == 0 {
+		if route, ok := t.root.routes[method]; ok {
+			return route, []string{}, true
+		}
+		return nil, nil, false
+	}
+
+	// Try standard matching first
+	node := t.root
+	var paramValues []string
+	var lastParamNode *TrieNode
+	var paramsSoFar []string
+
+	for i, seg := range segments {
+		// Remember last parameter node we encounter
+		if node.paramChild != nil {
+			lastParamNode = node
+			paramsSoFar = make([]string, len(paramValues))
+			copy(paramsSoFar, paramValues)
+		}
+
+		// Static match
+		if child, ok := node.staticChildren[seg]; ok {
+			node = child
+			continue
+		}
+
+		// Parameter match
+		if node.paramChild != nil {
+			node = node.paramChild
+			paramValues = append(paramValues, seg)
+			continue
+		}
+
+		// If we reach here, normal matching failed
+		// Check if we have a parameter that should capture all remaining segments
+		if lastParamNode != nil && lastParamNode.paramChild != nil {
+			if route, ok := lastParamNode.paramChild.routes[method]; ok {
+				// Find position of the last parameter
+				pattern := route.Pattern
+				if len(pattern.segments) > 0 {
+					lastSeg := pattern.segments[len(pattern.segments)-1]
+					if strings.HasPrefix(lastSeg, "{") && strings.HasSuffix(lastSeg, "}") {
+						// Last segment is a parameter - treat it as greedy
+						remainingSegs := segments[i-1:]
+						remainingPath := strings.Join(remainingSegs, "/")
+
+						// Use the parameters up to this point
+						result := append(paramsSoFar, remainingPath)
+						return route, result, true
+					}
+				}
+			}
+		}
+
+		// No match found
+		return nil, nil, false
+	}
+
+	// Normal match at the end of the path
+	if route, ok := node.routes[method]; ok {
+		return route, paramValues, true
+	}
+
+	return nil, nil, false
+}
+
+// Build flattens the router group into a list of routes
+func (rg *RouterGroup) Build() []Route {
+	routes := rg.buildRoutes(nil)
+
+	// Sort routes by literal count (descending) for precedence
+	sort.Slice(routes, func(i, j int) bool {
+		countI := routes[i].Pattern.LiteralCount()
+		countJ := routes[j].Pattern.LiteralCount()
+		return countI > countJ
+	})
+
+	return routes
+}
+
+// buildRoutes recursively collects all routes with inherited middleware
 func (rg *RouterGroup) buildRoutes(parentMiddleware []func(http.Handler) http.Handler) []Route {
-	// Combine parent middleware with current group's middleware
 	currentMiddleware := append(parentMiddleware, rg.middleware...)
-
-	result := make([]Route, 0, len(rg.routes))
-
-	// Apply current middleware to this group's routes
+	var result []Route
 	for _, route := range rg.routes {
 		newRoute := route
 		newRoute.Middleware = append(currentMiddleware, newRoute.Middleware...)
 		result = append(result, newRoute)
 	}
-
-	// Process subgroups
 	for _, group := range rg.groups {
-		groupRoutes := group.buildRoutes(currentMiddleware)
-		result = append(result, groupRoutes...)
+		result = append(result, group.buildRoutes(currentMiddleware)...)
 	}
-
 	return result
 }
 
-// Build returns all routes from this group and its subgroups, sorted by specificity
-func (rg *RouterGroup) Build() []Route {
-	routes := rg.buildRoutes(nil)
-	sort.Slice(routes, func(i, j int) bool {
-		return routes[i].Pattern.LiteralCount() > routes[j].Pattern.LiteralCount()
-	})
-	return routes
-}
-
-// ServeMux creates an http.ServeMux from the router group's routes
+// ServeMux creates an http.ServeMux with trie-based route matching
 func ServeMux(rg *RouterGroup) *http.ServeMux {
 	routes := rg.Build()
+	trie := NewTrie()
+	for i := range routes {
+		trie.Insert(&routes[i])
+	}
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		for _, route := range routes {
-			if match, params := route.Match(r.Method, r.URL.Path); match {
-				ctx := context.WithValue(r.Context(), "routeParams", params)
-				r = r.WithContext(ctx)
-				handler := http.Handler(route.Handler)
-				for i := len(route.Middleware) - 1; i >= 0; i-- {
-					handler = route.Middleware[i](handler)
-				}
-				handler.ServeHTTP(w, r)
-				return
+		route, paramValues, ok := trie.Match(r.Method, r.URL.Path)
+		if ok {
+			c := &Context{
+				ResponseWriter: w,
+				Request:        r,
+				Params:         make(map[string]string),
+				path:           route.Path,
 			}
+			// Populate params from trie matching
+			if len(route.paramNames) == len(paramValues) {
+				for i, name := range route.paramNames {
+					c.Params[name] = paramValues[i]
+				}
+			}
+
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				route.Handler(c)
+			})
+			for i := len(route.Middleware) - 1; i >= 0; i-- {
+				handler = http.HandlerFunc(route.Middleware[i](handler).ServeHTTP)
+			}
+			handler.ServeHTTP(w, r)
+			return
 		}
 		http.NotFound(w, r)
 	})
-
 	return mux
-}
-
-// GetParams retrieves the route parameters from the request context
-func GetParams(r *http.Request) map[string]string {
-	params, _ := r.Context().Value("routeParams").(map[string]string)
-	return params
 }

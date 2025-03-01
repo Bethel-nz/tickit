@@ -8,10 +8,9 @@ import (
 
 func TestRouter(t *testing.T) {
 	t.Run("Basic route matching", func(t *testing.T) {
-		rg := NewRoutes()
-		rg.GET("/users/:id", func(w http.ResponseWriter, r *http.Request) {
-			params := GetParams(r)
-			w.Write([]byte(params["id"]))
+		rg := NewRouter()
+		rg.GET("/users/{id}", func(c *Context) {
+			c.Write([]byte(c.Param("id")))
 		})
 
 		req := httptest.NewRequest("GET", "/users/123", nil)
@@ -29,16 +28,16 @@ func TestRouter(t *testing.T) {
 	})
 
 	t.Run("Static route priority", func(t *testing.T) {
-		rg := NewRoutes()
+		rg := NewRouter()
 		called := false
 
-		rg.GET("/users/:id", func(w http.ResponseWriter, r *http.Request) {
+		rg.GET("/users/{id}", func(c *Context) {
 			t.Error("Parameterized route should not be called")
 		})
 
-		rg.GET("/users/profile", func(w http.ResponseWriter, r *http.Request) {
+		rg.GET("/users/profile", func(c *Context) {
 			called = true
-			w.WriteHeader(http.StatusOK)
+			c.WriteHeader(http.StatusOK)
 		})
 
 		req := httptest.NewRequest("GET", "/users/profile", nil)
@@ -51,7 +50,7 @@ func TestRouter(t *testing.T) {
 	})
 
 	t.Run("Middleware execution", func(t *testing.T) {
-		rg := NewRoutes()
+		rg := NewRouter()
 		var executionOrder []string
 
 		rg.Group("/admin", func(h http.Handler) http.Handler {
@@ -59,9 +58,9 @@ func TestRouter(t *testing.T) {
 				executionOrder = append(executionOrder, "group")
 				h.ServeHTTP(w, r)
 			})
-		}).GET("/dashboard", func(w http.ResponseWriter, r *http.Request) {
+		}).GET("/dashboard", func(c *Context) {
 			executionOrder = append(executionOrder, "handler")
-			w.WriteHeader(http.StatusOK)
+			c.WriteHeader(http.StatusOK)
 		}, func(h http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				executionOrder = append(executionOrder, "route")
@@ -86,12 +85,11 @@ func TestRouter(t *testing.T) {
 	})
 
 	t.Run("Route groups", func(t *testing.T) {
-		rg := NewRoutes()
+		rg := NewRouter()
 		api := rg.Group("/api/v1")
 
-		api.GET("/users/:id", func(w http.ResponseWriter, r *http.Request) {
-			params := GetParams(r)
-			w.Write([]byte(params["id"]))
+		api.GET("/users/{id}", func(c *Context) {
+			c.Write([]byte(c.Param("id")))
 		})
 
 		req := httptest.NewRequest("GET", "/api/v1/users/456", nil)
@@ -115,7 +113,7 @@ func TestRouter(t *testing.T) {
 			expected map[string]string
 		}{
 			{
-				path: "/:category/:id",
+				path: "/{category}/{id}",
 				url:  "/books/123",
 				expected: map[string]string{
 					"category": "books",
@@ -123,7 +121,7 @@ func TestRouter(t *testing.T) {
 				},
 			},
 			{
-				path: "/files/:path*",
+				path: "/files/{path}",
 				url:  "/files/images/logo.png",
 				expected: map[string]string{
 					"path": "images/logo.png",
@@ -132,30 +130,32 @@ func TestRouter(t *testing.T) {
 		}
 
 		for _, tt := range tests {
-			rg := NewRoutes()
-			rg.GET(tt.path, func(w http.ResponseWriter, r *http.Request) {
-				params := GetParams(r)
-				for k, v := range tt.expected {
-					if params[k] != v {
-						t.Errorf("Param %s: got %s want %s", k, params[k], v)
+			t.Run(tt.path, func(t *testing.T) {
+				rg := NewRouter()
+				rg.GET(tt.path, func(c *Context) {
+					for k, v := range tt.expected {
+						if c.Param(k) != v {
+							t.Errorf("Param %s: got %s want %s", k, c.Param(k), v)
+						}
 					}
+					c.WriteHeader(http.StatusOK)
+				})
+
+				req := httptest.NewRequest("GET", tt.url, nil)
+				rr := httptest.NewRecorder()
+				ServeMux(rg).ServeHTTP(rr, req)
+
+				if status := rr.Code; status != http.StatusOK {
+					t.Errorf("handler returned wrong status for %s: got %v want %v",
+						tt.path, status, http.StatusOK)
 				}
-				w.WriteHeader(http.StatusOK)
 			})
-
-			req := httptest.NewRequest("GET", tt.url, nil)
-			rr := httptest.NewRecorder()
-			ServeMux(rg).ServeHTTP(rr, req)
-
-			if status := rr.Code; status != http.StatusOK {
-				t.Errorf("handler returned wrong status for %s: got %v want %v", tt.path, status, http.StatusOK)
-			}
 		}
 	})
 
 	t.Run("404 handling", func(t *testing.T) {
-		rg := NewRoutes()
-		rg.GET("/existing", func(w http.ResponseWriter, r *http.Request) {})
+		rg := NewRouter()
+		rg.GET("/existing", func(c *Context) {})
 
 		req := httptest.NewRequest("GET", "/not-found", nil)
 		rr := httptest.NewRecorder()
@@ -167,8 +167,8 @@ func TestRouter(t *testing.T) {
 	})
 
 	t.Run("Method validation", func(t *testing.T) {
-		rg := NewRoutes()
-		rg.POST("/users", func(w http.ResponseWriter, r *http.Request) {})
+		rg := NewRouter()
+		rg.POST("/users", func(c *Context) {})
 
 		req := httptest.NewRequest("GET", "/users", nil)
 		rr := httptest.NewRecorder()
@@ -180,16 +180,16 @@ func TestRouter(t *testing.T) {
 	})
 
 	t.Run("SortRoutes", func(t *testing.T) {
-		rg := NewRoutes()
-		rg.GET("/users/:id", func(w http.ResponseWriter, r *http.Request) {})    // 1 literal
-		rg.GET("/static/about", func(w http.ResponseWriter, r *http.Request) {}) // 2 literals
-		rg.GET("/:catchall", func(w http.ResponseWriter, r *http.Request) {})    // 0 literals
+		rg := NewRouter()
+		rg.GET("/users/{id}", func(c *Context) {})   // 1 literal
+		rg.GET("/static/about", func(c *Context) {}) // 2 literals
+		rg.GET("/{catchall}", func(c *Context) {})   // 0 literals
 
 		routes := rg.Build()
 		expectedOrder := []string{
 			"/static/about",
-			"/users/:id",
-			"/:catchall",
+			"/users/{id}",
+			"/{catchall}",
 		}
 
 		for i, route := range routes {
@@ -198,63 +198,78 @@ func TestRouter(t *testing.T) {
 			}
 		}
 	})
-}
 
-func TestPattern(t *testing.T) {
-	tests := []struct {
-		pattern  string
-		path     string
-		matches  bool
-		params   map[string]string
-		literals int
-	}{
-		{
-			pattern:  "/users/:id",
-			path:     "/users/123",
-			matches:  true,
-			params:   map[string]string{"id": "123"},
-			literals: 1,
-		},
-		{
-			pattern:  "/posts/:slug/comments/:cid",
-			path:     "/posts/hello-world/comments/456",
-			matches:  true,
-			params:   map[string]string{"slug": "hello-world", "cid": "456"},
-			literals: 2,
-		},
-		{
-			pattern:  "/static/about",
-			path:     "/static/about",
-			matches:  true,
-			params:   map[string]string{},
-			literals: 2,
-		},
-		{
-			pattern:  "/users/:id",
-			path:     "/users/123/profile",
-			matches:  false,
-			params:   nil,
-			literals: 1,
-		},
-	}
+	t.Run("Catchall parameter parsing", func(t *testing.T) {
+		rg := NewRouter()
+		rg.GET("/drive/files/{path}", func(c *Context) {
+			c.Write([]byte(c.Param("path")))
+		})
 
-	for _, tt := range tests {
-		p := NewPattern(tt.pattern)
-		if got := p.LiteralCount(); got != tt.literals {
-			t.Errorf("LiteralCount(%q) = %d, want %d", tt.pattern, got, tt.literals)
+		tests := []struct {
+			url      string
+			expected string
+		}{
+			{
+				url:      "/drive/files/image.jpg",
+				expected: "image.jpg",
+			},
+			{
+				url:      "/drive/files/docs/report.pdf",
+				expected: "docs/report.pdf",
+			},
 		}
 
-		match, params := p.Match(tt.path)
-		if match != tt.matches {
-			t.Errorf("Match(%q, %q) = %v, want %v", tt.pattern, tt.path, match, tt.matches)
-		}
+		for _, tt := range tests {
+			req := httptest.NewRequest("GET", tt.url, nil)
+			rr := httptest.NewRecorder()
+			ServeMux(rg).ServeHTTP(rr, req)
 
-		if tt.matches {
-			for k, v := range tt.params {
-				if params[k] != v {
-					t.Errorf("Param %q = %q, want %q", k, params[k], v)
-				}
+			if status := rr.Code; status != http.StatusOK {
+				t.Errorf("handler returned wrong status for %s: got %v want %v",
+					tt.url, status, http.StatusOK)
+			}
+
+			if rr.Body.String() != tt.expected {
+				t.Errorf("handler returned unexpected body for %s: got %v want %v",
+					tt.url, rr.Body.String(), tt.expected)
 			}
 		}
-	}
+	})
+
+	t.Run("Greedy parameter parsing", func(t *testing.T) {
+		rg := NewRouter()
+		rg.GET("/api/{all}", func(c *Context) {
+			c.Write([]byte(c.Param("all")))
+		})
+
+		tests := []struct {
+			url      string
+			expected string
+		}{
+			{
+				url:      "/api/users",
+				expected: "users",
+			},
+			{
+				url:      "/api/users/123/profile",
+				expected: "users/123/profile",
+			},
+		}
+
+		for _, tt := range tests {
+			req := httptest.NewRequest("GET", tt.url, nil)
+			rr := httptest.NewRecorder()
+			ServeMux(rg).ServeHTTP(rr, req)
+
+			if status := rr.Code; status != http.StatusOK {
+				t.Errorf("handler returned wrong status for %s: got %v want %v",
+					tt.url, status, http.StatusOK)
+			}
+
+			if rr.Body.String() != tt.expected {
+				t.Errorf("handler returned unexpected body for %s: got %v want %v",
+					tt.url, rr.Body.String(), tt.expected)
+			}
+		}
+	})
 }
