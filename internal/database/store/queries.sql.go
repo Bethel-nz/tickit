@@ -27,11 +27,64 @@ func (q *Queries) AddUserToTeam(ctx context.Context, arg AddUserToTeamParams) er
 	return err
 }
 
-const createIssue = `-- name: CreateIssue :one
+const checkTeamMembership = `-- name: CheckTeamMembership :one
+SELECT EXISTS (
+  SELECT 1 FROM team_members
+  WHERE team_id = $1 AND user_id = $2
+) AS is_member
+`
 
-INSERT INTO issues (project_id, title, description, status)
+type CheckTeamMembershipParams struct {
+	TeamID pgtype.UUID
+	UserID pgtype.UUID
+}
+
+func (q *Queries) CheckTeamMembership(ctx context.Context, arg CheckTeamMembershipParams) (bool, error) {
+	row := q.db.QueryRow(ctx, checkTeamMembership, arg.TeamID, arg.UserID)
+	var is_member bool
+	err := row.Scan(&is_member)
+	return is_member, err
+}
+
+const createComment = `-- name: CreateComment :one
+INSERT INTO comments (content, user_id, issue_id, task_id)
 VALUES ($1, $2, $3, $4)
-RETURNING id, project_id, title, description, status, created_at, updated_at
+RETURNING id, content, user_id, issue_id, task_id, created_at, updated_at
+`
+
+type CreateCommentParams struct {
+	Content string
+	UserID  pgtype.UUID
+	IssueID pgtype.UUID
+	TaskID  pgtype.UUID
+}
+
+// ------------------------------------------------------
+// Comments
+func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (Comment, error) {
+	row := q.db.QueryRow(ctx, createComment,
+		arg.Content,
+		arg.UserID,
+		arg.IssueID,
+		arg.TaskID,
+	)
+	var i Comment
+	err := row.Scan(
+		&i.ID,
+		&i.Content,
+		&i.UserID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createIssue = `-- name: CreateIssue :one
+INSERT INTO issues (project_id, title, description, status, reporter_id, assignee_id, due_date)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, project_id, title, description, status, reporter_id, assignee_id, due_date, created_at, updated_at
 `
 
 type CreateIssueParams struct {
@@ -39,6 +92,9 @@ type CreateIssueParams struct {
 	Title       string
 	Description pgtype.Text
 	Status      pgtype.Text
+	ReporterID  pgtype.UUID
+	AssigneeID  pgtype.UUID
+	DueDate     pgtype.Timestamp
 }
 
 // ------------------------------------------------------
@@ -49,6 +105,9 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		arg.Title,
 		arg.Description,
 		arg.Status,
+		arg.ReporterID,
+		arg.AssigneeID,
+		arg.DueDate,
 	)
 	var i Issue
 	err := row.Scan(
@@ -57,6 +116,9 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		&i.Title,
 		&i.Description,
 		&i.Status,
+		&i.ReporterID,
+		&i.AssigneeID,
+		&i.DueDate,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -64,26 +126,37 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 }
 
 const createProject = `-- name: CreateProject :one
-
-INSERT INTO projects (name, owner_id)
-VALUES ($1, $2)
-RETURNING id, name, owner_id, created_at, updated_at
+INSERT INTO projects (name, description, owner_id, team_id, status)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, name, description, owner_id, team_id, status, created_at, updated_at
 `
 
 type CreateProjectParams struct {
-	Name    string
-	OwnerID pgtype.UUID
+	Name        string
+	Description pgtype.Text
+	OwnerID     pgtype.UUID
+	TeamID      pgtype.UUID
+	Status      pgtype.Text
 }
 
 // ------------------------------------------------------
 // Projects
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, createProject, arg.Name, arg.OwnerID)
+	row := q.db.QueryRow(ctx, createProject,
+		arg.Name,
+		arg.Description,
+		arg.OwnerID,
+		arg.TeamID,
+		arg.Status,
+	)
 	var i Project
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
+		&i.Description,
 		&i.OwnerID,
+		&i.TeamID,
+		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -91,10 +164,9 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 }
 
 const createTask = `-- name: CreateTask :one
-
 INSERT INTO tasks (project_id, assignee_id, title, description, status, priority, due_date)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, project_id, assignee_id, title, status, priority, due_date, created_at, updated_at
+RETURNING id, project_id, assignee_id, title, description, status, priority, due_date, created_at, updated_at
 `
 
 type CreateTaskParams struct {
@@ -107,21 +179,9 @@ type CreateTaskParams struct {
 	DueDate     pgtype.Timestamp
 }
 
-type CreateTaskRow struct {
-	ID         pgtype.UUID
-	ProjectID  pgtype.UUID
-	AssigneeID pgtype.UUID
-	Title      string
-	Status     pgtype.Text
-	Priority   pgtype.Text
-	DueDate    pgtype.Timestamp
-	CreatedAt  pgtype.Timestamp
-	UpdatedAt  pgtype.Timestamp
-}
-
 // ------------------------------------------------------
 // Tasks
-func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (CreateTaskRow, error) {
+func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error) {
 	row := q.db.QueryRow(ctx, createTask,
 		arg.ProjectID,
 		arg.AssigneeID,
@@ -131,12 +191,13 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (CreateT
 		arg.Priority,
 		arg.DueDate,
 	)
-	var i CreateTaskRow
+	var i Task
 	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
 		&i.AssigneeID,
 		&i.Title,
+		&i.Description,
 		&i.Status,
 		&i.Priority,
 		&i.DueDate,
@@ -147,20 +208,27 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (CreateT
 }
 
 const createTeam = `-- name: CreateTeam :one
-
-INSERT INTO teams (name)
-VALUES ($1)
-RETURNING id, name, created_at, updated_at
+INSERT INTO teams (name, description, avatar_url)
+VALUES ($1, $2, $3)
+RETURNING id, name, description, avatar_url, created_at, updated_at
 `
+
+type CreateTeamParams struct {
+	Name        string
+	Description pgtype.Text
+	AvatarUrl   pgtype.Text
+}
 
 // ------------------------------------------------------
 // Teams
-func (q *Queries) CreateTeam(ctx context.Context, name string) (Team, error) {
-	row := q.db.QueryRow(ctx, createTeam, name)
+func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error) {
+	row := q.db.QueryRow(ctx, createTeam, arg.Name, arg.Description, arg.AvatarUrl)
 	var i Team
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
+		&i.Description,
+		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -168,34 +236,69 @@ func (q *Queries) CreateTeam(ctx context.Context, name string) (Team, error) {
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (email, password)
-VALUES ($1, $2)
-RETURNING id, email, created_at, updated_at
+INSERT INTO users (email, password, name, username, avatar_url, bio)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, email, name, username, avatar_url, bio, email_verified, created_at, updated_at
 `
 
 type CreateUserParams struct {
-	Email    string
-	Password string
+	Email     string
+	Password  string
+	Name      pgtype.Text
+	Username  pgtype.Text
+	AvatarUrl pgtype.Text
+	Bio       pgtype.Text
 }
 
 type CreateUserRow struct {
-	ID        pgtype.UUID
-	Email     string
-	CreatedAt pgtype.Timestamp
-	UpdatedAt pgtype.Timestamp
+	ID            pgtype.UUID
+	Email         string
+	Name          pgtype.Text
+	Username      pgtype.Text
+	AvatarUrl     pgtype.Text
+	Bio           pgtype.Text
+	EmailVerified pgtype.Bool
+	CreatedAt     pgtype.Timestamp
+	UpdatedAt     pgtype.Timestamp
 }
 
 // Users
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error) {
-	row := q.db.QueryRow(ctx, createUser, arg.Email, arg.Password)
+	row := q.db.QueryRow(ctx, createUser,
+		arg.Email,
+		arg.Password,
+		arg.Name,
+		arg.Username,
+		arg.AvatarUrl,
+		arg.Bio,
+	)
 	var i CreateUserRow
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
+		&i.Name,
+		&i.Username,
+		&i.AvatarUrl,
+		&i.Bio,
+		&i.EmailVerified,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteComment = `-- name: DeleteComment :exec
+DELETE FROM comments WHERE id = $1 AND user_id = $2
+`
+
+type DeleteCommentParams struct {
+	ID     pgtype.UUID
+	UserID pgtype.UUID
+}
+
+func (q *Queries) DeleteComment(ctx context.Context, arg DeleteCommentParams) error {
+	_, err := q.db.Exec(ctx, deleteComment, arg.ID, arg.UserID)
+	return err
 }
 
 const deleteIssue = `-- name: DeleteIssue :exec
@@ -225,6 +328,15 @@ func (q *Queries) DeleteTask(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const deleteTeam = `-- name: DeleteTeam :exec
+DELETE FROM teams WHERE id = $1
+`
+
+func (q *Queries) DeleteTeam(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteTeam, id)
+	return err
+}
+
 const deleteUser = `-- name: DeleteUser :exec
 DELETE FROM users WHERE id = $1
 `
@@ -234,10 +346,346 @@ func (q *Queries) DeleteUser(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const getActiveProjectsCount = `-- name: GetActiveProjectsCount :one
+SELECT COUNT(*) 
+FROM projects 
+WHERE owner_id = $1 AND status = 'active'
+`
+
+func (q *Queries) GetActiveProjectsCount(ctx context.Context, ownerID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, getActiveProjectsCount, ownerID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const getCommentByID = `-- name: GetCommentByID :one
+SELECT id, content, user_id, issue_id, task_id, created_at, updated_at
+FROM comments
+WHERE id = $1
+`
+
+func (q *Queries) GetCommentByID(ctx context.Context, id pgtype.UUID) (Comment, error) {
+	row := q.db.QueryRow(ctx, getCommentByID, id)
+	var i Comment
+	err := row.Scan(
+		&i.ID,
+		&i.Content,
+		&i.UserID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getCommentsByIssue = `-- name: GetCommentsByIssue :many
+SELECT c.id, c.content, c.user_id, c.created_at, c.updated_at, 
+       u.name AS user_name, u.username, u.avatar_url
+FROM comments c
+JOIN users u ON c.user_id = u.id
+WHERE c.issue_id = $1
+ORDER BY c.created_at ASC
+`
+
+type GetCommentsByIssueRow struct {
+	ID        pgtype.UUID
+	Content   string
+	UserID    pgtype.UUID
+	CreatedAt pgtype.Timestamp
+	UpdatedAt pgtype.Timestamp
+	UserName  pgtype.Text
+	Username  pgtype.Text
+	AvatarUrl pgtype.Text
+}
+
+func (q *Queries) GetCommentsByIssue(ctx context.Context, issueID pgtype.UUID) ([]GetCommentsByIssueRow, error) {
+	rows, err := q.db.Query(ctx, getCommentsByIssue, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCommentsByIssueRow
+	for rows.Next() {
+		var i GetCommentsByIssueRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.UserID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.UserName,
+			&i.Username,
+			&i.AvatarUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getCommentsByTask = `-- name: GetCommentsByTask :many
+SELECT c.id, c.content, c.user_id, c.created_at, c.updated_at, 
+       u.name AS user_name, u.username, u.avatar_url
+FROM comments c
+JOIN users u ON c.user_id = u.id
+WHERE c.task_id = $1
+ORDER BY c.created_at ASC
+`
+
+type GetCommentsByTaskRow struct {
+	ID        pgtype.UUID
+	Content   string
+	UserID    pgtype.UUID
+	CreatedAt pgtype.Timestamp
+	UpdatedAt pgtype.Timestamp
+	UserName  pgtype.Text
+	Username  pgtype.Text
+	AvatarUrl pgtype.Text
+}
+
+func (q *Queries) GetCommentsByTask(ctx context.Context, taskID pgtype.UUID) ([]GetCommentsByTaskRow, error) {
+	rows, err := q.db.Query(ctx, getCommentsByTask, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCommentsByTaskRow
+	for rows.Next() {
+		var i GetCommentsByTaskRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.UserID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.UserName,
+			&i.Username,
+			&i.AvatarUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getIssueByID = `-- name: GetIssueByID :one
+SELECT id, project_id, title, description, status, reporter_id, assignee_id, due_date, created_at, updated_at
+FROM issues
+WHERE id = $1
+`
+
+func (q *Queries) GetIssueByID(ctx context.Context, id pgtype.UUID) (Issue, error) {
+	row := q.db.QueryRow(ctx, getIssueByID, id)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.ReporterID,
+		&i.AssigneeID,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getIssuesAssignedToUser = `-- name: GetIssuesAssignedToUser :many
+SELECT i.id, i.project_id, i.title, i.description, i.status, i.reporter_id, i.due_date, 
+       i.created_at, i.updated_at, p.name AS project_name
+FROM issues i
+JOIN projects p ON i.project_id = p.id
+WHERE i.assignee_id = $1
+ORDER BY i.due_date ASC NULLS LAST, i.created_at DESC
+`
+
+type GetIssuesAssignedToUserRow struct {
+	ID          pgtype.UUID
+	ProjectID   pgtype.UUID
+	Title       string
+	Description pgtype.Text
+	Status      pgtype.Text
+	ReporterID  pgtype.UUID
+	DueDate     pgtype.Timestamp
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
+	ProjectName string
+}
+
+func (q *Queries) GetIssuesAssignedToUser(ctx context.Context, assigneeID pgtype.UUID) ([]GetIssuesAssignedToUserRow, error) {
+	rows, err := q.db.Query(ctx, getIssuesAssignedToUser, assigneeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetIssuesAssignedToUserRow
+	for rows.Next() {
+		var i GetIssuesAssignedToUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.ReporterID,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ProjectName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getIssuesByStatus = `-- name: GetIssuesByStatus :many
+SELECT issues.id, issues.project_id, issues.title, issues.description, issues.reporter_id, 
+       issues.assignee_id, issues.due_date, issues.created_at, issues.updated_at
+FROM issues
+WHERE issues.project_id = $1 AND issues.status = $2
+ORDER BY issues.created_at DESC
+`
+
+type GetIssuesByStatusParams struct {
+	ProjectID pgtype.UUID
+	Status    pgtype.Text
+}
+
+type GetIssuesByStatusRow struct {
+	ID          pgtype.UUID
+	ProjectID   pgtype.UUID
+	Title       string
+	Description pgtype.Text
+	ReporterID  pgtype.UUID
+	AssigneeID  pgtype.UUID
+	DueDate     pgtype.Timestamp
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
+}
+
+func (q *Queries) GetIssuesByStatus(ctx context.Context, arg GetIssuesByStatusParams) ([]GetIssuesByStatusRow, error) {
+	rows, err := q.db.Query(ctx, getIssuesByStatus, arg.ProjectID, arg.Status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetIssuesByStatusRow
+	for rows.Next() {
+		var i GetIssuesByStatusRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Description,
+			&i.ReporterID,
+			&i.AssigneeID,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getOverdueTasks = `-- name: GetOverdueTasks :many
+SELECT t.id, t.project_id, t.assignee_id, t.title, t.status, t.priority, t.due_date, 
+       p.name AS project_name
+FROM tasks t
+JOIN projects p ON t.project_id = p.id
+WHERE t.due_date < now() AND t.status != 'done' AND t.assignee_id = $1
+ORDER BY t.due_date ASC
+`
+
+type GetOverdueTasksRow struct {
+	ID          pgtype.UUID
+	ProjectID   pgtype.UUID
+	AssigneeID  pgtype.UUID
+	Title       string
+	Status      pgtype.Text
+	Priority    pgtype.Text
+	DueDate     pgtype.Timestamp
+	ProjectName string
+}
+
+func (q *Queries) GetOverdueTasks(ctx context.Context, assigneeID pgtype.UUID) ([]GetOverdueTasksRow, error) {
+	rows, err := q.db.Query(ctx, getOverdueTasks, assigneeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetOverdueTasksRow
+	for rows.Next() {
+		var i GetOverdueTasksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.AssigneeID,
+			&i.Title,
+			&i.Status,
+			&i.Priority,
+			&i.DueDate,
+			&i.ProjectName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getProjectByID = `-- name: GetProjectByID :one
+SELECT id, name, description, owner_id, team_id, status, created_at, updated_at
+FROM projects
+WHERE id = $1
+`
+
+func (q *Queries) GetProjectByID(ctx context.Context, id pgtype.UUID) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectByID, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.OwnerID,
+		&i.TeamID,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getProjectIssues = `-- name: GetProjectIssues :many
-SELECT id, title, description, status, created_at, updated_at
+SELECT id, title, description, status, reporter_id, assignee_id, due_date, created_at, updated_at
 FROM issues
 WHERE project_id = $1
+ORDER BY created_at DESC
 `
 
 type GetProjectIssuesRow struct {
@@ -245,6 +693,9 @@ type GetProjectIssuesRow struct {
 	Title       string
 	Description pgtype.Text
 	Status      pgtype.Text
+	ReporterID  pgtype.UUID
+	AssigneeID  pgtype.UUID
+	DueDate     pgtype.Timestamp
 	CreatedAt   pgtype.Timestamp
 	UpdatedAt   pgtype.Timestamp
 }
@@ -263,6 +714,9 @@ func (q *Queries) GetProjectIssues(ctx context.Context, projectID pgtype.UUID) (
 			&i.Title,
 			&i.Description,
 			&i.Status,
+			&i.ReporterID,
+			&i.AssigneeID,
+			&i.DueDate,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -276,17 +730,393 @@ func (q *Queries) GetProjectIssues(ctx context.Context, projectID pgtype.UUID) (
 	return items, nil
 }
 
-const getTeamMembers = `-- name: GetTeamMembers :many
-SELECT users.id, users.email, team_members.role
+const getProjectStats = `-- name: GetProjectStats :one
+SELECT
+  (SELECT COUNT(*) FROM issues WHERE issues.project_id = $1) AS total_issues,
+  (SELECT COUNT(*) FROM issues WHERE issues.project_id = $1 AND issues.status = 'open') AS open_issues,
+  (SELECT COUNT(*) FROM issues WHERE issues.project_id = $1 AND issues.status = 'in_progress') AS in_progress_issues,
+  (SELECT COUNT(*) FROM issues WHERE issues.project_id = $1 AND issues.status = 'closed') AS closed_issues,
+  (SELECT COUNT(*) FROM tasks WHERE tasks.project_id = $1) AS total_tasks,
+  (SELECT COUNT(*) FROM tasks WHERE tasks.project_id = $1 AND tasks.status = 'todo') AS todo_tasks,
+  (SELECT COUNT(*) FROM tasks WHERE tasks.project_id = $1 AND tasks.status = 'in_progress') AS in_progress_tasks,
+  (SELECT COUNT(*) FROM tasks WHERE tasks.project_id = $1 AND tasks.status = 'done') AS done_tasks
+`
+
+type GetProjectStatsRow struct {
+	TotalIssues      int64
+	OpenIssues       int64
+	InProgressIssues int64
+	ClosedIssues     int64
+	TotalTasks       int64
+	TodoTasks        int64
+	InProgressTasks  int64
+	DoneTasks        int64
+}
+
+func (q *Queries) GetProjectStats(ctx context.Context, projectID pgtype.UUID) (GetProjectStatsRow, error) {
+	row := q.db.QueryRow(ctx, getProjectStats, projectID)
+	var i GetProjectStatsRow
+	err := row.Scan(
+		&i.TotalIssues,
+		&i.OpenIssues,
+		&i.InProgressIssues,
+		&i.ClosedIssues,
+		&i.TotalTasks,
+		&i.TodoTasks,
+		&i.InProgressTasks,
+		&i.DoneTasks,
+	)
+	return i, err
+}
+
+const getProjectTasks = `-- name: GetProjectTasks :many
+SELECT id, assignee_id, title, description, status, priority, due_date, created_at, updated_at
+FROM tasks
+WHERE project_id = $1
+ORDER BY priority DESC, due_date ASC NULLS LAST, created_at DESC
+`
+
+type GetProjectTasksRow struct {
+	ID          pgtype.UUID
+	AssigneeID  pgtype.UUID
+	Title       string
+	Description pgtype.Text
+	Status      pgtype.Text
+	Priority    pgtype.Text
+	DueDate     pgtype.Timestamp
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
+}
+
+func (q *Queries) GetProjectTasks(ctx context.Context, projectID pgtype.UUID) ([]GetProjectTasksRow, error) {
+	rows, err := q.db.Query(ctx, getProjectTasks, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetProjectTasksRow
+	for rows.Next() {
+		var i GetProjectTasksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AssigneeID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getProjectsByStatus = `-- name: GetProjectsByStatus :many
+SELECT id, name, description, owner_id, team_id, created_at, updated_at
+FROM projects
+WHERE status = $1
+ORDER BY updated_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type GetProjectsByStatusParams struct {
+	Status pgtype.Text
+	Limit  int32
+	Offset int32
+}
+
+type GetProjectsByStatusRow struct {
+	ID          pgtype.UUID
+	Name        string
+	Description pgtype.Text
+	OwnerID     pgtype.UUID
+	TeamID      pgtype.UUID
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
+}
+
+func (q *Queries) GetProjectsByStatus(ctx context.Context, arg GetProjectsByStatusParams) ([]GetProjectsByStatusRow, error) {
+	rows, err := q.db.Query(ctx, getProjectsByStatus, arg.Status, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetProjectsByStatusRow
+	for rows.Next() {
+		var i GetProjectsByStatusRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.OwnerID,
+			&i.TeamID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getRecentComments = `-- name: GetRecentComments :many
+SELECT c.id, c.content, c.user_id, c.issue_id, c.task_id, c.created_at,
+       u.name AS user_name, u.username
+FROM comments c
+JOIN users u ON c.user_id = u.id
+WHERE c.issue_id IN (
+    SELECT id FROM issues WHERE issues.assignee_id = $1
+) OR c.task_id IN (
+    SELECT id FROM tasks WHERE tasks.assignee_id = $1
+)
+ORDER BY c.created_at DESC
+LIMIT $2
+`
+
+type GetRecentCommentsParams struct {
+	AssigneeID pgtype.UUID
+	Limit      int32
+}
+
+type GetRecentCommentsRow struct {
+	ID        pgtype.UUID
+	Content   string
+	UserID    pgtype.UUID
+	IssueID   pgtype.UUID
+	TaskID    pgtype.UUID
+	CreatedAt pgtype.Timestamp
+	UserName  pgtype.Text
+	Username  pgtype.Text
+}
+
+func (q *Queries) GetRecentComments(ctx context.Context, arg GetRecentCommentsParams) ([]GetRecentCommentsRow, error) {
+	rows, err := q.db.Query(ctx, getRecentComments, arg.AssigneeID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetRecentCommentsRow
+	for rows.Next() {
+		var i GetRecentCommentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.UserID,
+			&i.IssueID,
+			&i.TaskID,
+			&i.CreatedAt,
+			&i.UserName,
+			&i.Username,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getRecentIssues = `-- name: GetRecentIssues :many
+SELECT i.id, i.project_id, i.title, i.status, i.due_date, p.name AS project_name
+FROM issues i
+JOIN projects p ON i.project_id = p.id
+WHERE i.project_id IN (
+    SELECT id FROM projects WHERE projects.owner_id = $1
+    UNION
+    SELECT p2.id FROM projects p2
+    JOIN teams t ON p2.team_id = t.id
+    JOIN team_members tm ON t.id = tm.team_id
+    WHERE tm.user_id = $1
+)
+ORDER BY i.created_at DESC
+LIMIT $2
+`
+
+type GetRecentIssuesParams struct {
+	OwnerID pgtype.UUID
+	Limit   int32
+}
+
+type GetRecentIssuesRow struct {
+	ID          pgtype.UUID
+	ProjectID   pgtype.UUID
+	Title       string
+	Status      pgtype.Text
+	DueDate     pgtype.Timestamp
+	ProjectName string
+}
+
+func (q *Queries) GetRecentIssues(ctx context.Context, arg GetRecentIssuesParams) ([]GetRecentIssuesRow, error) {
+	rows, err := q.db.Query(ctx, getRecentIssues, arg.OwnerID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetRecentIssuesRow
+	for rows.Next() {
+		var i GetRecentIssuesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Status,
+			&i.DueDate,
+			&i.ProjectName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getTaskByID = `-- name: GetTaskByID :one
+SELECT id, project_id, assignee_id, title, description, status, priority, due_date, created_at, updated_at
+FROM tasks
+WHERE id = $1
+`
+
+func (q *Queries) GetTaskByID(ctx context.Context, id pgtype.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, getTaskByID, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.AssigneeID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTasksByStatus = `-- name: GetTasksByStatus :many
+SELECT id, project_id, assignee_id, title, description, priority, due_date, created_at, updated_at
+FROM tasks
+WHERE project_id = $1 AND status = $2
+ORDER BY priority DESC, due_date ASC NULLS LAST
+`
+
+type GetTasksByStatusParams struct {
+	ProjectID pgtype.UUID
+	Status    pgtype.Text
+}
+
+type GetTasksByStatusRow struct {
+	ID          pgtype.UUID
+	ProjectID   pgtype.UUID
+	AssigneeID  pgtype.UUID
+	Title       string
+	Description pgtype.Text
+	Priority    pgtype.Text
+	DueDate     pgtype.Timestamp
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
+}
+
+func (q *Queries) GetTasksByStatus(ctx context.Context, arg GetTasksByStatusParams) ([]GetTasksByStatusRow, error) {
+	rows, err := q.db.Query(ctx, getTasksByStatus, arg.ProjectID, arg.Status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTasksByStatusRow
+	for rows.Next() {
+		var i GetTasksByStatusRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.AssigneeID,
+			&i.Title,
+			&i.Description,
+			&i.Priority,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getTeamByID = `-- name: GetTeamByID :one
+SELECT id, name, description, avatar_url, created_at, updated_at
+FROM teams
+WHERE id = $1
+`
+
+func (q *Queries) GetTeamByID(ctx context.Context, id pgtype.UUID) (Team, error) {
+	row := q.db.QueryRow(ctx, getTeamByID, id)
+	var i Team
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTeamMemberRole = `-- name: GetTeamMemberRole :one
+SELECT role
 FROM team_members
-JOIN users ON users.id = team_members.user_id
-WHERE team_members.team_id = $1
+WHERE team_id = $1 AND user_id = $2
+`
+
+type GetTeamMemberRoleParams struct {
+	TeamID pgtype.UUID
+	UserID pgtype.UUID
+}
+
+func (q *Queries) GetTeamMemberRole(ctx context.Context, arg GetTeamMemberRoleParams) (pgtype.Text, error) {
+	row := q.db.QueryRow(ctx, getTeamMemberRole, arg.TeamID, arg.UserID)
+	var role pgtype.Text
+	err := row.Scan(&role)
+	return role, err
+}
+
+const getTeamMembers = `-- name: GetTeamMembers :many
+SELECT u.id, u.email, u.name, u.username, u.avatar_url, tm.role
+FROM team_members tm
+JOIN users u ON u.id = tm.user_id
+WHERE tm.team_id = $1
+ORDER BY tm.created_at
 `
 
 type GetTeamMembersRow struct {
-	ID    pgtype.UUID
-	Email string
-	Role  pgtype.Text
+	ID        pgtype.UUID
+	Email     string
+	Name      pgtype.Text
+	Username  pgtype.Text
+	AvatarUrl pgtype.Text
+	Role      pgtype.Text
 }
 
 func (q *Queries) GetTeamMembers(ctx context.Context, teamID pgtype.UUID) ([]GetTeamMembersRow, error) {
@@ -298,7 +1128,146 @@ func (q *Queries) GetTeamMembers(ctx context.Context, teamID pgtype.UUID) ([]Get
 	var items []GetTeamMembersRow
 	for rows.Next() {
 		var i GetTeamMembersRow
-		if err := rows.Scan(&i.ID, &i.Email, &i.Role); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Name,
+			&i.Username,
+			&i.AvatarUrl,
+			&i.Role,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getTeamProjects = `-- name: GetTeamProjects :many
+SELECT id, name, description, owner_id, status, created_at, updated_at
+FROM projects
+WHERE team_id = $1
+ORDER BY updated_at DESC
+`
+
+type GetTeamProjectsRow struct {
+	ID          pgtype.UUID
+	Name        string
+	Description pgtype.Text
+	OwnerID     pgtype.UUID
+	Status      pgtype.Text
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
+}
+
+func (q *Queries) GetTeamProjects(ctx context.Context, teamID pgtype.UUID) ([]GetTeamProjectsRow, error) {
+	rows, err := q.db.Query(ctx, getTeamProjects, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTeamProjectsRow
+	for rows.Next() {
+		var i GetTeamProjectsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.OwnerID,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getUserActivityFeed = `-- name: GetUserActivityFeed :many
+WITH user_activities AS (
+  -- Projects created
+  SELECT 'project_created' AS activity_type, p.id AS entity_id, p.name AS entity_name,
+         null::uuid AS related_entity_id, null AS related_entity_name,
+         p.created_at AS activity_time
+  FROM projects p
+  WHERE p.owner_id = $1
+  
+  UNION ALL
+  
+  -- Issues created
+  SELECT 'issue_created' AS activity_type, i.id AS entity_id, i.title AS entity_name,
+         i.project_id AS related_entity_id, p.name AS related_entity_name,
+         i.created_at AS activity_time
+  FROM issues i
+  JOIN projects p ON i.project_id = p.id
+  WHERE i.reporter_id = $1
+  
+  UNION ALL
+  
+  -- Comments created
+  SELECT 'comment_created' AS activity_type, c.id AS entity_id, c.content AS entity_name,
+         COALESCE(c.issue_id, c.task_id) AS related_entity_id,
+         COALESCE(i.title, t.title) AS related_entity_name,
+         c.created_at AS activity_time
+  FROM comments c
+  LEFT JOIN issues i ON c.issue_id = i.id
+  LEFT JOIN tasks t ON c.task_id = t.id
+  WHERE c.user_id = $1
+  
+  UNION ALL
+  
+  -- Tasks created or updated
+  SELECT 'task_updated' AS activity_type, t.id AS entity_id, t.title AS entity_name,
+         t.project_id AS related_entity_id, p.name AS related_entity_name,
+         t.updated_at AS activity_time
+  FROM tasks t
+  JOIN projects p ON t.project_id = p.id
+  WHERE t.assignee_id = $1 AND t.updated_at > t.created_at
+)
+SELECT activity_type, entity_id, entity_name, related_entity_id, related_entity_name, activity_time FROM user_activities
+ORDER BY activity_time DESC
+LIMIT $2
+`
+
+type GetUserActivityFeedParams struct {
+	OwnerID pgtype.UUID
+	Limit   int32
+}
+
+type GetUserActivityFeedRow struct {
+	ActivityType      string
+	EntityID          pgtype.UUID
+	EntityName        string
+	RelatedEntityID   pgtype.UUID
+	RelatedEntityName interface{}
+	ActivityTime      pgtype.Timestamp
+}
+
+func (q *Queries) GetUserActivityFeed(ctx context.Context, arg GetUserActivityFeedParams) ([]GetUserActivityFeedRow, error) {
+	rows, err := q.db.Query(ctx, getUserActivityFeed, arg.OwnerID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUserActivityFeedRow
+	for rows.Next() {
+		var i GetUserActivityFeedRow
+		if err := rows.Scan(
+			&i.ActivityType,
+			&i.EntityID,
+			&i.EntityName,
+			&i.RelatedEntityID,
+			&i.RelatedEntityName,
+			&i.ActivityTime,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -310,7 +1279,7 @@ func (q *Queries) GetTeamMembers(ctx context.Context, teamID pgtype.UUID) ([]Get
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password, created_at, updated_at
+SELECT id, email, password, name, username, avatar_url, bio, email_verified, last_login_at, account_status, created_at, updated_at
 FROM users
 WHERE email = $1
 `
@@ -322,6 +1291,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.ID,
 		&i.Email,
 		&i.Password,
+		&i.Name,
+		&i.Username,
+		&i.AvatarUrl,
+		&i.Bio,
+		&i.EmailVerified,
+		&i.LastLoginAt,
+		&i.AccountStatus,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -329,16 +1305,23 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, created_at, updated_at
+SELECT id, email, name, username, avatar_url, bio, email_verified, last_login_at, account_status, created_at, updated_at
 FROM users
 WHERE id = $1
 `
 
 type GetUserByIDRow struct {
-	ID        pgtype.UUID
-	Email     string
-	CreatedAt pgtype.Timestamp
-	UpdatedAt pgtype.Timestamp
+	ID            pgtype.UUID
+	Email         string
+	Name          pgtype.Text
+	Username      pgtype.Text
+	AvatarUrl     pgtype.Text
+	Bio           pgtype.Text
+	EmailVerified pgtype.Bool
+	LastLoginAt   pgtype.Timestamp
+	AccountStatus pgtype.Text
+	CreatedAt     pgtype.Timestamp
+	UpdatedAt     pgtype.Timestamp
 }
 
 func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDRow, error) {
@@ -347,6 +1330,122 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDR
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
+		&i.Name,
+		&i.Username,
+		&i.AvatarUrl,
+		&i.Bio,
+		&i.EmailVerified,
+		&i.LastLoginAt,
+		&i.AccountStatus,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserByUsername = `-- name: GetUserByUsername :one
+SELECT id, email, name, username, avatar_url, bio, email_verified, last_login_at, account_status, created_at, updated_at
+FROM users
+WHERE username = $1
+`
+
+type GetUserByUsernameRow struct {
+	ID            pgtype.UUID
+	Email         string
+	Name          pgtype.Text
+	Username      pgtype.Text
+	AvatarUrl     pgtype.Text
+	Bio           pgtype.Text
+	EmailVerified pgtype.Bool
+	LastLoginAt   pgtype.Timestamp
+	AccountStatus pgtype.Text
+	CreatedAt     pgtype.Timestamp
+	UpdatedAt     pgtype.Timestamp
+}
+
+func (q *Queries) GetUserByUsername(ctx context.Context, username pgtype.Text) (GetUserByUsernameRow, error) {
+	row := q.db.QueryRow(ctx, getUserByUsername, username)
+	var i GetUserByUsernameRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.Username,
+		&i.AvatarUrl,
+		&i.Bio,
+		&i.EmailVerified,
+		&i.LastLoginAt,
+		&i.AccountStatus,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserDashboardStats = `-- name: GetUserDashboardStats :one
+SELECT 
+  (SELECT COUNT(*) FROM projects WHERE owner_id = $1) AS owned_projects,
+  (SELECT COUNT(*) FROM issues WHERE assignee_id = $1) AS assigned_issues,
+  (SELECT COUNT(*) FROM issues WHERE assignee_id = $1 AND status != 'closed') AS open_issues,
+  (SELECT COUNT(*) FROM tasks WHERE assignee_id = $1) AS assigned_tasks,
+  (SELECT COUNT(*) FROM tasks WHERE assignee_id = $1 AND status != 'done') AS pending_tasks,
+  (SELECT COUNT(*) FROM tasks WHERE assignee_id = $1 AND due_date < now() AND status != 'done') AS overdue_tasks
+`
+
+type GetUserDashboardStatsRow struct {
+	OwnedProjects  int64
+	AssignedIssues int64
+	OpenIssues     int64
+	AssignedTasks  int64
+	PendingTasks   int64
+	OverdueTasks   int64
+}
+
+// ------------------------------------------------------
+// Dashboard Queries
+func (q *Queries) GetUserDashboardStats(ctx context.Context, ownerID pgtype.UUID) (GetUserDashboardStatsRow, error) {
+	row := q.db.QueryRow(ctx, getUserDashboardStats, ownerID)
+	var i GetUserDashboardStatsRow
+	err := row.Scan(
+		&i.OwnedProjects,
+		&i.AssignedIssues,
+		&i.OpenIssues,
+		&i.AssignedTasks,
+		&i.PendingTasks,
+		&i.OverdueTasks,
+	)
+	return i, err
+}
+
+const getUserProfile = `-- name: GetUserProfile :one
+SELECT id, email, name, username, avatar_url, bio, email_verified, created_at, updated_at
+FROM users
+WHERE id = $1
+`
+
+type GetUserProfileRow struct {
+	ID            pgtype.UUID
+	Email         string
+	Name          pgtype.Text
+	Username      pgtype.Text
+	AvatarUrl     pgtype.Text
+	Bio           pgtype.Text
+	EmailVerified pgtype.Bool
+	CreatedAt     pgtype.Timestamp
+	UpdatedAt     pgtype.Timestamp
+}
+
+func (q *Queries) GetUserProfile(ctx context.Context, id pgtype.UUID) (GetUserProfileRow, error) {
+	row := q.db.QueryRow(ctx, getUserProfile, id)
+	var i GetUserProfileRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.Username,
+		&i.AvatarUrl,
+		&i.Bio,
+		&i.EmailVerified,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -354,9 +1453,10 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDR
 }
 
 const getUserProjects = `-- name: GetUserProjects :many
-SELECT id, name, owner_id, created_at, updated_at
+SELECT id, name, description, owner_id, team_id, status, created_at, updated_at
 FROM projects
 WHERE owner_id = $1
+ORDER BY updated_at DESC
 `
 
 func (q *Queries) GetUserProjects(ctx context.Context, ownerID pgtype.UUID) ([]Project, error) {
@@ -371,7 +1471,10 @@ func (q *Queries) GetUserProjects(ctx context.Context, ownerID pgtype.UUID) ([]P
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
+			&i.Description,
 			&i.OwnerID,
+			&i.TeamID,
+			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -386,20 +1489,25 @@ func (q *Queries) GetUserProjects(ctx context.Context, ownerID pgtype.UUID) ([]P
 }
 
 const getUserTasks = `-- name: GetUserTasks :many
-SELECT id, project_id, title, status, priority, due_date, created_at, updated_at
-FROM tasks
-WHERE assignee_id = $1
+SELECT t.id, t.project_id, t.title, t.description, t.status, t.priority, t.due_date, 
+       t.created_at, t.updated_at, p.name AS project_name
+FROM tasks t
+JOIN projects p ON t.project_id = p.id
+WHERE t.assignee_id = $1
+ORDER BY t.due_date ASC NULLS LAST, t.priority DESC, t.created_at DESC
 `
 
 type GetUserTasksRow struct {
-	ID        pgtype.UUID
-	ProjectID pgtype.UUID
-	Title     string
-	Status    pgtype.Text
-	Priority  pgtype.Text
-	DueDate   pgtype.Timestamp
-	CreatedAt pgtype.Timestamp
-	UpdatedAt pgtype.Timestamp
+	ID          pgtype.UUID
+	ProjectID   pgtype.UUID
+	Title       string
+	Description pgtype.Text
+	Status      pgtype.Text
+	Priority    pgtype.Text
+	DueDate     pgtype.Timestamp
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
+	ProjectName string
 }
 
 func (q *Queries) GetUserTasks(ctx context.Context, assigneeID pgtype.UUID) ([]GetUserTasksRow, error) {
@@ -415,11 +1523,107 @@ func (q *Queries) GetUserTasks(ctx context.Context, assigneeID pgtype.UUID) ([]G
 			&i.ID,
 			&i.ProjectID,
 			&i.Title,
+			&i.Description,
 			&i.Status,
 			&i.Priority,
 			&i.DueDate,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ProjectName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getUserTeams = `-- name: GetUserTeams :many
+SELECT t.id, t.name, t.description, t.avatar_url, tm.role
+FROM teams t
+JOIN team_members tm ON t.id = tm.team_id
+WHERE tm.user_id = $1
+ORDER BY t.name
+`
+
+type GetUserTeamsRow struct {
+	ID          pgtype.UUID
+	Name        string
+	Description pgtype.Text
+	AvatarUrl   pgtype.Text
+	Role        pgtype.Text
+}
+
+func (q *Queries) GetUserTeams(ctx context.Context, userID pgtype.UUID) ([]GetUserTeamsRow, error) {
+	rows, err := q.db.Query(ctx, getUserTeams, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUserTeamsRow
+	for rows.Next() {
+		var i GetUserTeamsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.AvatarUrl,
+			&i.Role,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsers = `-- name: ListUsers :many
+SELECT id, email, name, username, avatar_url, email_verified, account_status, created_at
+FROM users
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListUsersParams struct {
+	Limit  int32
+	Offset int32
+}
+
+type ListUsersRow struct {
+	ID            pgtype.UUID
+	Email         string
+	Name          pgtype.Text
+	Username      pgtype.Text
+	AvatarUrl     pgtype.Text
+	EmailVerified pgtype.Bool
+	AccountStatus pgtype.Text
+	CreatedAt     pgtype.Timestamp
+}
+
+func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error) {
+	rows, err := q.db.Query(ctx, listUsers, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsersRow
+	for rows.Next() {
+		var i ListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Name,
+			&i.Username,
+			&i.AvatarUrl,
+			&i.EmailVerified,
+			&i.AccountStatus,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -446,6 +1650,137 @@ func (q *Queries) RemoveUserFromTeam(ctx context.Context, arg RemoveUserFromTeam
 	return err
 }
 
+const searchEntities = `-- name: SearchEntities :many
+WITH search_results AS (
+  -- Projects
+  SELECT 'project' AS entity_type, p.id AS entity_id, p.name AS entity_name,
+         p.description AS entity_description, p.created_at,
+         p.owner_id AS user_id, null::uuid AS parent_id
+  FROM projects p
+  WHERE (p.owner_id = $1 OR p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1))
+    AND (p.name ILIKE '%' || $2 || '%' OR p.description ILIKE '%' || $2 || '%')
+  
+  UNION ALL
+  
+  -- Issues
+  SELECT 'issue' AS entity_type, i.id AS entity_id, i.title AS entity_name,
+         i.description AS entity_description, i.created_at,
+         i.reporter_id AS user_id, i.project_id AS parent_id
+  FROM issues i
+  JOIN projects p ON i.project_id = p.id
+  WHERE (p.owner_id = $1 OR p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1))
+    AND (i.title ILIKE '%' || $2 || '%' OR i.description ILIKE '%' || $2 || '%')
+  
+  UNION ALL
+  
+  -- Tasks
+  SELECT 'task' AS entity_type, t.id AS entity_id, t.title AS entity_name,
+         t.description AS entity_description, t.created_at,
+         t.assignee_id AS user_id, t.project_id AS parent_id
+  FROM tasks t
+  JOIN projects p ON t.project_id = p.id
+  WHERE (p.owner_id = $1 OR p.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1))
+    AND (t.title ILIKE '%' || $2 || '%' OR t.description ILIKE '%' || $2 || '%')
+)
+SELECT entity_type, entity_id, entity_name, entity_description, created_at, user_id, parent_id FROM search_results
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type SearchEntitiesParams struct {
+	OwnerID pgtype.UUID
+	Column2 pgtype.Text
+	Limit   int32
+}
+
+type SearchEntitiesRow struct {
+	EntityType        string
+	EntityID          pgtype.UUID
+	EntityName        string
+	EntityDescription pgtype.Text
+	CreatedAt         pgtype.Timestamp
+	UserID            pgtype.UUID
+	ParentID          pgtype.UUID
+}
+
+func (q *Queries) SearchEntities(ctx context.Context, arg SearchEntitiesParams) ([]SearchEntitiesRow, error) {
+	rows, err := q.db.Query(ctx, searchEntities, arg.OwnerID, arg.Column2, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchEntitiesRow
+	for rows.Next() {
+		var i SearchEntitiesRow
+		if err := rows.Scan(
+			&i.EntityType,
+			&i.EntityID,
+			&i.EntityName,
+			&i.EntityDescription,
+			&i.CreatedAt,
+			&i.UserID,
+			&i.ParentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateCommentContent = `-- name: UpdateCommentContent :exec
+UPDATE comments
+SET content = $2, updated_at = now()
+WHERE id = $1 AND user_id = $3
+`
+
+type UpdateCommentContentParams struct {
+	ID      pgtype.UUID
+	Content string
+	UserID  pgtype.UUID
+}
+
+func (q *Queries) UpdateCommentContent(ctx context.Context, arg UpdateCommentContentParams) error {
+	_, err := q.db.Exec(ctx, updateCommentContent, arg.ID, arg.Content, arg.UserID)
+	return err
+}
+
+const updateIssueDetails = `-- name: UpdateIssueDetails :exec
+UPDATE issues
+SET 
+  title = COALESCE($2, title),
+  description = COALESCE($3, description),
+  status = COALESCE($4, status),
+  assignee_id = COALESCE($5, assignee_id),
+  due_date = COALESCE($6, due_date),
+  updated_at = now()
+WHERE id = $1
+`
+
+type UpdateIssueDetailsParams struct {
+	ID          pgtype.UUID
+	Title       string
+	Description pgtype.Text
+	Status      pgtype.Text
+	AssigneeID  pgtype.UUID
+	DueDate     pgtype.Timestamp
+}
+
+func (q *Queries) UpdateIssueDetails(ctx context.Context, arg UpdateIssueDetailsParams) error {
+	_, err := q.db.Exec(ctx, updateIssueDetails,
+		arg.ID,
+		arg.Title,
+		arg.Description,
+		arg.Status,
+		arg.AssigneeID,
+		arg.DueDate,
+	)
+	return err
+}
+
 const updateIssueStatus = `-- name: UpdateIssueStatus :exec
 UPDATE issues
 SET status = $2, updated_at = now()
@@ -459,6 +1794,72 @@ type UpdateIssueStatusParams struct {
 
 func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusParams) error {
 	_, err := q.db.Exec(ctx, updateIssueStatus, arg.ID, arg.Status)
+	return err
+}
+
+const updateProjectDetails = `-- name: UpdateProjectDetails :exec
+UPDATE projects
+SET 
+  name = COALESCE($2, name),
+  description = COALESCE($3, description),
+  status = COALESCE($4, status),
+  team_id = COALESCE($5, team_id),
+  updated_at = now()
+WHERE id = $1
+`
+
+type UpdateProjectDetailsParams struct {
+	ID          pgtype.UUID
+	Name        string
+	Description pgtype.Text
+	Status      pgtype.Text
+	TeamID      pgtype.UUID
+}
+
+func (q *Queries) UpdateProjectDetails(ctx context.Context, arg UpdateProjectDetailsParams) error {
+	_, err := q.db.Exec(ctx, updateProjectDetails,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.Status,
+		arg.TeamID,
+	)
+	return err
+}
+
+const updateTaskDetails = `-- name: UpdateTaskDetails :exec
+UPDATE tasks
+SET 
+  title = COALESCE($2, title),
+  description = COALESCE($3, description),
+  status = COALESCE($4, status),
+  priority = COALESCE($5, priority),
+  assignee_id = COALESCE($6, assignee_id),
+  due_date = COALESCE($7, due_date),
+  updated_at = now()
+WHERE id = $1
+`
+
+type UpdateTaskDetailsParams struct {
+	ID          pgtype.UUID
+	Title       string
+	Description pgtype.Text
+	Status      pgtype.Text
+	Priority    pgtype.Text
+	AssigneeID  pgtype.UUID
+	DueDate     pgtype.Timestamp
+}
+
+func (q *Queries) UpdateTaskDetails(ctx context.Context, arg UpdateTaskDetailsParams) error {
+	_, err := q.db.Exec(ctx, updateTaskDetails,
+		arg.ID,
+		arg.Title,
+		arg.Description,
+		arg.Status,
+		arg.Priority,
+		arg.AssigneeID,
+		arg.DueDate,
+	)
 	return err
 }
 
@@ -478,6 +1879,77 @@ func (q *Queries) UpdateTaskStatus(ctx context.Context, arg UpdateTaskStatusPara
 	return err
 }
 
+const updateTeam = `-- name: UpdateTeam :exec
+UPDATE teams
+SET 
+  name = COALESCE($2, name),
+  description = COALESCE($3, description),
+  avatar_url = COALESCE($4, avatar_url),
+  updated_at = now()
+WHERE id = $1
+`
+
+type UpdateTeamParams struct {
+	ID          pgtype.UUID
+	Name        string
+	Description pgtype.Text
+	AvatarUrl   pgtype.Text
+}
+
+func (q *Queries) UpdateTeam(ctx context.Context, arg UpdateTeamParams) error {
+	_, err := q.db.Exec(ctx, updateTeam,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.AvatarUrl,
+	)
+	return err
+}
+
+const updateTeamMemberRole = `-- name: UpdateTeamMemberRole :exec
+UPDATE team_members
+SET role = $3, updated_at = now()
+WHERE team_id = $1 AND user_id = $2
+`
+
+type UpdateTeamMemberRoleParams struct {
+	TeamID pgtype.UUID
+	UserID pgtype.UUID
+	Role   pgtype.Text
+}
+
+func (q *Queries) UpdateTeamMemberRole(ctx context.Context, arg UpdateTeamMemberRoleParams) error {
+	_, err := q.db.Exec(ctx, updateTeamMemberRole, arg.TeamID, arg.UserID, arg.Role)
+	return err
+}
+
+const updateUserAccountStatus = `-- name: UpdateUserAccountStatus :exec
+UPDATE users
+SET account_status = $2, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateUserAccountStatusParams struct {
+	ID            pgtype.UUID
+	AccountStatus pgtype.Text
+}
+
+func (q *Queries) UpdateUserAccountStatus(ctx context.Context, arg UpdateUserAccountStatusParams) error {
+	_, err := q.db.Exec(ctx, updateUserAccountStatus, arg.ID, arg.AccountStatus)
+	return err
+}
+
+const updateUserLastLogin = `-- name: UpdateUserLastLogin :exec
+UPDATE users
+SET last_login_at = now(), updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) UpdateUserLastLogin(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateUserLastLogin, id)
+	return err
+}
+
 const updateUserPassword = `-- name: UpdateUserPassword :exec
 UPDATE users
 SET password = $2, updated_at = now()
@@ -491,5 +1963,49 @@ type UpdateUserPasswordParams struct {
 
 func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error {
 	_, err := q.db.Exec(ctx, updateUserPassword, arg.ID, arg.Password)
+	return err
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :exec
+UPDATE users
+SET 
+  name = COALESCE($2, name),
+  email = COALESCE($3, email),
+  username = COALESCE($4, username),
+  avatar_url = COALESCE($5, avatar_url),
+  bio = COALESCE($6, bio),
+  updated_at = now()
+WHERE id = $1
+`
+
+type UpdateUserProfileParams struct {
+	ID        pgtype.UUID
+	Name      pgtype.Text
+	Email     string
+	Username  pgtype.Text
+	AvatarUrl pgtype.Text
+	Bio       pgtype.Text
+}
+
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) error {
+	_, err := q.db.Exec(ctx, updateUserProfile,
+		arg.ID,
+		arg.Name,
+		arg.Email,
+		arg.Username,
+		arg.AvatarUrl,
+		arg.Bio,
+	)
+	return err
+}
+
+const verifyUserEmail = `-- name: VerifyUserEmail :exec
+UPDATE users
+SET email_verified = true, updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) VerifyUserEmail(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, verifyUserEmail, id)
 	return err
 }

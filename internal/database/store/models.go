@@ -8,22 +8,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Comment struct {
+	ID        pgtype.UUID
+	Content   string
+	UserID    pgtype.UUID
+	IssueID   pgtype.UUID
+	TaskID    pgtype.UUID
+	CreatedAt pgtype.Timestamp
+	UpdatedAt pgtype.Timestamp
+}
+
 type Issue struct {
 	ID          pgtype.UUID
 	ProjectID   pgtype.UUID
 	Title       string
 	Description pgtype.Text
 	Status      pgtype.Text
+	ReporterID  pgtype.UUID
+	AssigneeID  pgtype.UUID
+	DueDate     pgtype.Timestamp
 	CreatedAt   pgtype.Timestamp
 	UpdatedAt   pgtype.Timestamp
 }
 
 type Project struct {
-	ID        pgtype.UUID
-	Name      string
-	OwnerID   pgtype.UUID
-	CreatedAt pgtype.Timestamp
-	UpdatedAt pgtype.Timestamp
+	ID          pgtype.UUID
+	Name        string
+	Description pgtype.Text
+	OwnerID     pgtype.UUID
+	TeamID      pgtype.UUID
+	Status      pgtype.Text
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
 }
 
 type Task struct {
@@ -40,10 +56,12 @@ type Task struct {
 }
 
 type Team struct {
-	ID        pgtype.UUID
-	Name      string
-	CreatedAt pgtype.Timestamp
-	UpdatedAt pgtype.Timestamp
+	ID          pgtype.UUID
+	Name        string
+	Description pgtype.Text
+	AvatarUrl   pgtype.Text
+	CreatedAt   pgtype.Timestamp
+	UpdatedAt   pgtype.Timestamp
 }
 
 type TeamMember struct {
@@ -55,9 +73,16 @@ type TeamMember struct {
 }
 
 type User struct {
-	ID        pgtype.UUID
-	Email     string
-	Password  string
-	CreatedAt pgtype.Timestamp
-	UpdatedAt pgtype.Timestamp
+	ID            pgtype.UUID
+	Email         string
+	Password      string
+	Name          pgtype.Text
+	Username      pgtype.Text
+	AvatarUrl     pgtype.Text
+	Bio           pgtype.Text
+	EmailVerified pgtype.Bool
+	LastLoginAt   pgtype.Timestamp
+	AccountStatus pgtype.Text
+	CreatedAt     pgtype.Timestamp
+	UpdatedAt     pgtype.Timestamp
 }
