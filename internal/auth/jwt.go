@@ -9,9 +9,7 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 )
 
-const (
-	secretKey = env.String("TICKIT_JWT_KEY", "", env.Required)
-)
+var secretKey = env.String("TICKIT_JWT_KEY", "", env.Require).Get()
 
 type Claims struct {
 	UserID string `json:"user_id"`
