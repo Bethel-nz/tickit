@@ -329,3 +329,30 @@ func (s *UserService) ResetPassword(ctx context.Context, token, newPassword stri
 
 	return nil
 }
+
+// AuthenticateUser verifies credentials and returns the user if valid
+func (s *UserService) AuthenticateUser(ctx context.Context, email, password string) (*store.User, error) {
+	// Get user by email
+	user, err := s.queries.GetUserByEmail(ctx, email)
+	if err != nil {
+		return nil, fmt.Errorf("%w: user not found", ErrInvalidCredentials)
+	}
+
+	// Split password into salt and hash
+	parts := strings.Split(user.Password, ":")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid password format in database")
+	}
+	salt, storedHash := parts[0], parts[1]
+
+	// Verify password
+	valid, err := auth.VerifyPassword(salt, password, storedHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify password: %w", err)
+	}
+	if !valid {
+		return nil, ErrInvalidCredentials
+	}
+
+	return &user, nil
+}

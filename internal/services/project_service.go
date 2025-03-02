@@ -45,6 +45,13 @@ type ProjectInfo struct {
 	UpdatedAt   string `json:"updated_at,omitempty"`
 }
 
+// ProjectUpdates contains fields that can be updated for a project
+type ProjectUpdates struct {
+	Name        string
+	Description string
+	Status      string
+}
+
 type ProjectService struct {
 	queries     *store.Queries
 	cache       *redis.Client
@@ -60,13 +67,13 @@ func NewProjectService(queries *store.Queries, cache *redis.Client, teamService 
 }
 
 // CreateProject creates a new project with the provided information
-func (s *ProjectService) CreateProject(ctx context.Context, params store.CreateProjectParams) (*store.Project, error) {
+func (s *ProjectService) CreateProject(ctx context.Context, params store.CreateProjectParams, userID string) (*store.Project, error) {
 	if params.Name == "" {
 		return nil, fmt.Errorf("%w: project name is required", ErrInvalidProjectData)
 	}
 
 	if params.TeamID.Valid {
-		isMember, err := s.teamService.CheckTeamMembership(ctx, params.TeamID.String(), params.OwnerID.String())
+		isMember, err := s.teamService.CheckTeamMembership(ctx, params.TeamID.String(), userID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check team membership: %w", err)
 		}
@@ -75,13 +82,18 @@ func (s *ProjectService) CreateProject(ctx context.Context, params store.CreateP
 		}
 	}
 
-	// Create project in database
+	var scannedUserId pgtype.UUID
+	if err := scannedUserId.Scan(userID); err != nil {
+		return nil, fmt.Errorf("invalid user ID format: %w", err)
+	}
+
+	params.OwnerID = scannedUserId
+
 	project, err := s.queries.CreateProject(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project: %w", err)
 	}
 
-	// Cache project data
 	s.cacheProject(ctx, &project)
 
 	return &project, nil
@@ -136,7 +148,6 @@ func (s *ProjectService) GetUserProjects(ctx context.Context, userID string) ([]
 		}
 	}
 
-	// Get from database
 	dbProjects, err := s.queries.GetUserProjects(ctx, userUUID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user projects: %w", err)
@@ -181,7 +192,6 @@ func (s *ProjectService) GetTeamProjects(ctx context.Context, teamID string, use
 		return nil, ErrNotTeamMember
 	}
 
-	// Try to get from cache
 	cacheKey := fmt.Sprintf("team:%s:projects", teamID)
 	cachedProjects, err := s.cache.Get(ctx, cacheKey).Result()
 	if err == nil {
@@ -191,8 +201,6 @@ func (s *ProjectService) GetTeamProjects(ctx context.Context, teamID string, use
 		}
 	}
 
-	// Get from database using a custom query
-	// Note: You might need to add this query to your SQL file and regenerate the code
 	dbProjects, err := s.queries.GetTeamProjects(ctx, teamUUID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get team projects: %w", err)
@@ -225,10 +233,9 @@ func (s *ProjectService) GetTeamProjects(ctx context.Context, teamID string, use
 }
 
 // UpdateProject updates project information
-func (s *ProjectService) UpdateProject(ctx context.Context, params store.UpdateProjectDetailsParams, userID string) error {
-	// Get the current project to check ownership
+func (s *ProjectService) UpdateProject(ctx context.Context, projectID string, updates ProjectUpdates, userID string) error {
 	var projectUUID pgtype.UUID
-	if err := projectUUID.Scan(params.ID); err != nil {
+	if err := projectUUID.Scan(projectID); err != nil {
 		return fmt.Errorf("invalid project ID: %w", err)
 	}
 
@@ -237,34 +244,38 @@ func (s *ProjectService) UpdateProject(ctx context.Context, params store.UpdateP
 		return fmt.Errorf("failed to get project: %w", err)
 	}
 
-	// Check if user has permission to update
 	if err := s.verifyProjectOwnership(&project, userID); err != nil {
 		return err
 	}
 
-	// If team is being changed, check membership
-	if params.TeamID.Valid {
-		isMember, err := s.teamService.CheckTeamMembership(ctx, params.TeamID.String(), userID)
-		if err != nil {
-			return fmt.Errorf("failed to check team membership: %w", err)
-		}
-		if !isMember {
-			return fmt.Errorf("%w: user is not a member of the specified team", ErrInvalidProjectData)
-		}
+	params := store.UpdateProjectDetailsParams{
+		ID: projectUUID,
 	}
 
-	// Update project in database
+	if updates.Name != "" {
+		params.Name = updates.Name
+	}
+
+	if updates.Description != "" {
+		params.Description = pgtype.Text{String: updates.Description, Valid: true}
+	}
+
+	if updates.Status != "" {
+		if !isValidStatus(updates.Status) {
+			return fmt.Errorf("%w: invalid status", ErrInvalidProjectData)
+		}
+		params.Status = pgtype.Text{String: updates.Status, Valid: true}
+	}
+
 	if err := s.queries.UpdateProjectDetails(ctx, params); err != nil {
 		return fmt.Errorf("failed to update project: %w", err)
 	}
 
-	// Invalidate cache
-	cacheKey := fmt.Sprintf("project:%s", params.ID)
+	cacheKey := fmt.Sprintf("project:%s", projectID)
 	if err := s.cache.Del(ctx, cacheKey).Err(); err != nil {
 		log.Printf("Failed to invalidate project cache: %v", err)
 	}
 
-	// Also invalidate user/team projects caches
 	var userUUID pgtype.UUID
 	if err := userUUID.Scan(userID); err == nil {
 		userCacheKey := fmt.Sprintf("user:%s:projects", userID)
@@ -286,29 +297,24 @@ func (s *ProjectService) DeleteProject(ctx context.Context, projectID string, us
 		return fmt.Errorf("invalid project ID: %w", err)
 	}
 
-	// Get the project to check ownership
 	project, err := s.queries.GetProjectByID(ctx, projectUUID)
 	if err != nil {
 		return fmt.Errorf("failed to get project: %w", err)
 	}
 
-	// Check if user has permission to delete
 	if err := s.verifyProjectOwnership(&project, userID); err != nil {
 		return err
 	}
 
-	// Delete project from database
 	if err := s.queries.DeleteProject(ctx, projectUUID); err != nil {
 		return fmt.Errorf("failed to delete project: %w", err)
 	}
 
-	// Invalidate cache
 	cacheKey := fmt.Sprintf("project:%s", projectID)
 	if err := s.cache.Del(ctx, cacheKey).Err(); err != nil {
 		log.Printf("Failed to invalidate project cache: %v", err)
 	}
 
-	// Also invalidate user/team projects caches
 	userCacheKey := fmt.Sprintf("user:%s:projects", userID)
 	s.cache.Del(ctx, userCacheKey)
 
@@ -333,12 +339,10 @@ func (s *ProjectService) GetProjectStats(ctx context.Context, projectID string, 
 		return nil, fmt.Errorf("failed to get project: %w", err)
 	}
 
-	// Verify access
 	if err := s.verifyProjectAccess(ctx, &project, userID); err != nil {
 		return nil, err
 	}
 
-	// Try to get from cache first
 	cacheKey := fmt.Sprintf("project:%s:stats", projectID)
 	cachedStats, err := s.cache.Get(ctx, cacheKey).Result()
 	if err == nil {
@@ -348,13 +352,11 @@ func (s *ProjectService) GetProjectStats(ctx context.Context, projectID string, 
 		}
 	}
 
-	// Get stats from database
 	dbStats, err := s.queries.GetProjectStats(ctx, projectUUID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get project stats: %w", err)
 	}
 
-	// Convert to our response type
 	stats := &ProjectStats{
 		TotalIssues:      int(dbStats.TotalIssues),
 		OpenIssues:       int(dbStats.OpenIssues),
@@ -366,7 +368,6 @@ func (s *ProjectService) GetProjectStats(ctx context.Context, projectID string, 
 		DoneTasks:        int(dbStats.DoneTasks),
 	}
 
-	// Cache for 5 minutes since stats change frequently
 	statsJSON, err := json.Marshal(stats)
 	if err == nil {
 		if err := s.cache.Set(ctx, cacheKey, statsJSON, 5*time.Minute).Err(); err != nil {
@@ -433,4 +434,73 @@ func (s *ProjectService) verifyProjectAccess(ctx context.Context, project *store
 	}
 
 	return nil
+}
+
+// projectToInfo converts a store.Project to a ProjectInfo
+func (s *ProjectService) projectToInfo(p store.Project) ProjectInfo {
+	return ProjectInfo{
+		ID:          p.ID.String(),
+		Name:        p.Name,
+		Description: p.Description.String,
+		OwnerID:     p.OwnerID.String(),
+		TeamID:      p.TeamID.String(),
+		Status:      p.Status.String,
+		CreatedAt:   p.CreatedAt.Time.Format(time.RFC3339),
+		UpdatedAt:   p.UpdatedAt.Time.Format(time.RFC3339),
+	}
+}
+
+// GetProjectsByStatus retrieves projects with the specified status that the user has access to
+func (s *ProjectService) GetProjectsByStatus(ctx context.Context, status string, userID string) ([]ProjectInfo, error) {
+
+	if !isValidStatus(status) {
+		return nil, ErrInvalidProjectData
+	}
+
+	var scannedUserId pgtype.UUID
+	if err := scannedUserId.Scan(userID); err != nil {
+		return nil, fmt.Errorf("invalid user ID format: %w", err)
+	}
+
+	var statusText pgtype.Text
+	if err := statusText.Scan(status); err != nil {
+		return nil, fmt.Errorf("invalid status format: %w", err)
+	}
+
+	projects, err := s.queries.GetProjectsByStatus(ctx, store.GetProjectsByStatusParams{
+		Status: statusText,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get projects: %w", err)
+	}
+
+	// Convert to ProjectInfo objects
+	result := make([]ProjectInfo, 0, len(projects))
+	for _, p := range projects {
+		result = append(result, ProjectInfo{
+			ID:          p.ID.String(),
+			Name:        p.Name,
+			Description: p.Description.String,
+			OwnerID:     p.OwnerID.String(),
+			TeamID:      p.TeamID.String(),
+			Status:      p.Status.String,
+			CreatedAt:   p.CreatedAt.Time.Format(time.RFC3339),
+			UpdatedAt:   p.UpdatedAt.Time.Format(time.RFC3339),
+		})
+	}
+
+	return result, nil
+}
+
+func isValidStatus(status string) bool {
+	validStatuses := map[string]bool{
+		"planned":   true,
+		"active":    true,
+		"completed": true,
+		"on_hold":   true,
+		"cancelled": true,
+		"archived":  true,
+	}
+
+	return validStatuses[status]
 }

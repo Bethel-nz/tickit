@@ -19,6 +19,8 @@ var (
 	ErrInvalidTeamData   = errors.New("invalid team data")
 	ErrNotTeamMember     = errors.New("user is not a team member")
 	ErrInsufficientRoles = errors.New("insufficient permissions for this operation")
+	ErrUnauthorized      = errors.New("unauthorized action")
+	ErrNotMember         = errors.New("user is not a team member")
 )
 
 // TeamMemberInfo represents a team member with role information
@@ -428,20 +430,18 @@ func (s *TeamService) GetTeamMembers(ctx context.Context, teamID, requestorID st
 	cacheKey := fmt.Sprintf("team:%s:members", teamID)
 	cachedMembers, err := s.cache.Get(ctx, cacheKey).Result()
 	if err == nil {
-		// Cache hit
+		
 		var members []TeamMemberInfo
 		if err := json.Unmarshal([]byte(cachedMembers), &members); err == nil {
 			return members, nil
 		}
 	}
 
-	// Get from database
 	dbMembers, err := s.queries.GetTeamMembers(ctx, teamUUID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get team members: %w", err)
 	}
 
-	// Convert to our response format
 	members := make([]TeamMemberInfo, len(dbMembers))
 	for i, m := range dbMembers {
 		members[i] = TeamMemberInfo{
@@ -454,10 +454,8 @@ func (s *TeamService) GetTeamMembers(ctx context.Context, teamID, requestorID st
 		}
 	}
 
-	// Cache the result
 	membersJSON, err := json.Marshal(members)
 	if err == nil {
-		// Cache for 5 minutes - team membership changes more frequently than other data
 		if err := s.cache.Set(ctx, cacheKey, membersJSON, 5*time.Minute).Err(); err != nil {
 			log.Printf("Failed to cache team members: %v", err)
 		}
@@ -473,24 +471,20 @@ func (s *TeamService) GetUserTeams(ctx context.Context, userID string) ([]TeamIn
 		return nil, fmt.Errorf("invalid user ID: %w", err)
 	}
 
-	// Try to get from cache
 	cacheKey := fmt.Sprintf("user:%s:teams", userID)
 	cachedTeams, err := s.cache.Get(ctx, cacheKey).Result()
 	if err == nil {
-		// Cache hit
 		var teams []TeamInfo
 		if err := json.Unmarshal([]byte(cachedTeams), &teams); err == nil {
 			return teams, nil
 		}
 	}
 
-	// Get from database
 	dbTeams, err := s.queries.GetUserTeams(ctx, userUUID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user teams: %w", err)
 	}
 
-	// Convert to our response format
 	teams := make([]TeamInfo, len(dbTeams))
 	for i, t := range dbTeams {
 		teams[i] = TeamInfo{
@@ -499,15 +493,12 @@ func (s *TeamService) GetUserTeams(ctx context.Context, userID string) ([]TeamIn
 			Description: t.Description.String,
 			AvatarURL:   t.AvatarUrl.String,
 			Role:        t.Role.String,
-			// We don't have CreateAt/UpdatedAt in the query results,
-			// would need to modify the query or fetch separately
 		}
 	}
 
 	// Cache the result
 	teamsJSON, err := json.Marshal(teams)
 	if err == nil {
-		// Cache for 10 minutes
 		if err := s.cache.Set(ctx, cacheKey, teamsJSON, 10*time.Minute).Err(); err != nil {
 			log.Printf("Failed to cache user teams: %v", err)
 		}
@@ -573,4 +564,180 @@ func (s *TeamService) cacheTeam(_ context.Context, team *store.Team) {
 	if err := s.cache.Set(context.Background(), cacheKey, teamJSON, time.Hour).Err(); err != nil {
 		log.Printf("Failed to cache team: %v", err)
 	}
+}
+
+// AddMember adds a new member to a team with the specified role
+func (s *TeamService) AddMember(ctx context.Context, teamID, userToAddID, role, requestingUserID string) error {
+	
+	var teamUUID pgtype.UUID
+	if err := teamUUID.Scan(teamID); err != nil {
+		return fmt.Errorf("invalid team ID: %w", err)
+	}
+
+	if _, err := s.queries.GetTeamByID(ctx, teamUUID); err != nil {
+		return ErrTeamNotFound
+	}
+
+	var requestingUserUUID pgtype.UUID
+	if err := requestingUserUUID.Scan(requestingUserID); err != nil {
+		return fmt.Errorf("invalid user ID: %w", err)
+	}
+
+	isAdmin, err := s.isTeamAdmin(ctx, teamID, requestingUserID)
+	if err != nil {
+		return err
+	}
+
+	if !isAdmin {
+		return ErrUnauthorized
+	}
+
+	var userToAddUUID pgtype.UUID
+	if err := userToAddUUID.Scan(userToAddID); err != nil {
+		return fmt.Errorf("invalid user ID for new member: %w", err)
+	}
+
+	var roleText pgtype.Text
+	if err := roleText.Scan(role); err != nil {
+		return fmt.Errorf("invalid role: %w", err)
+	}
+
+	isMember, err := s.CheckTeamMembership(ctx, teamID, userToAddID)
+	if err != nil {
+		return fmt.Errorf("failed to check team membership: %w", err)
+	}
+
+	if isMember {
+		err = s.queries.UpdateTeamMemberRole(ctx, store.UpdateTeamMemberRoleParams{
+			TeamID: teamUUID,
+			UserID: userToAddUUID,
+			Role:   roleText,
+		})
+	} else {
+		err = s.queries.AddUserToTeam(ctx, store.AddUserToTeamParams{
+			TeamID: teamUUID,
+			UserID: userToAddUUID,
+			Role:   roleText,
+		})
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to add team member: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveMember removes a user from a team
+func (s *TeamService) RemoveMember(ctx context.Context, teamID, memberID, requestingUserID string) error {
+
+	var teamUUID pgtype.UUID
+	if err := teamUUID.Scan(teamID); err != nil {
+		return fmt.Errorf("invalid team ID: %w", err)
+	}
+
+	if _, err := s.queries.GetTeamByID(ctx, teamUUID); err != nil {
+		return ErrTeamNotFound
+	}
+
+	var requestingUserUUID pgtype.UUID
+	if err := requestingUserUUID.Scan(requestingUserID); err != nil {
+		return fmt.Errorf("invalid user ID: %w", err)
+	}
+
+	isAdmin, err := s.isTeamAdmin(ctx, teamID, requestingUserID)
+	if err != nil {
+		return err
+	}
+
+	isSelf := requestingUserID == memberID
+
+	if !isAdmin && !isSelf {
+		return ErrUnauthorized
+	}
+
+	if isAdmin && memberID != requestingUserID {
+		isLastAdmin, err := s.isLastAdmin(ctx, teamID, memberID)
+		if err != nil {
+			return fmt.Errorf("failed to check admin status: %w", err)
+		}
+		if isLastAdmin {
+			return fmt.Errorf("cannot remove the last admin from the team")
+		}
+	}
+
+	var memberUUID pgtype.UUID
+	if err := memberUUID.Scan(memberID); err != nil {
+		return fmt.Errorf("invalid member ID: %w", err)
+	}
+
+	if err := s.queries.RemoveUserFromTeam(ctx, store.RemoveUserFromTeamParams{
+		TeamID: teamUUID,
+		UserID: memberUUID,
+	}); err != nil {
+		return fmt.Errorf("failed to remove team member: %w", err)
+	}
+
+	return nil
+}
+
+// Helper method to check if a user is the last admin of a team
+func (s *TeamService) isLastAdmin(ctx context.Context, teamID, userID string) (bool, error) {
+	var teamUUID pgtype.UUID
+	if err := teamUUID.Scan(teamID); err != nil {
+		return false, fmt.Errorf("invalid team ID: %w", err)
+	}
+
+	admins, err := s.queries.GetTeamAdmins(ctx, teamUUID)
+	if err != nil {
+		return false, fmt.Errorf("failed to get team admins: %w", err)
+	}
+
+	if len(admins) <= 1 {
+		if len(admins) == 1 {
+			admin := admins[0]
+			if admin.UserID.String() == userID {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	return false, nil
+}
+
+func (s *TeamService) isTeamAdmin(ctx context.Context, teamID, userID string) (bool, error) {
+	isMember, role, err := s.GetMemberRole(ctx, teamID, userID)
+	if err != nil {
+		return false, err
+	}
+
+	if !isMember {
+		return false, ErrNotMember
+	}
+
+	return role == "admin", nil
+}
+
+func (s *TeamService) GetMemberRole(ctx context.Context, teamID, userID string) (bool, string, error) {
+	var teamUUID pgtype.UUID
+	if err := teamUUID.Scan(teamID); err != nil {
+		return false, "", fmt.Errorf("invalid team ID: %w", err)
+	}
+
+	var userUUID pgtype.UUID
+	if err := userUUID.Scan(userID); err != nil {
+		return false, "", fmt.Errorf("invalid user ID: %w", err)
+	}
+
+	member, err := s.queries.GetTeamMember(ctx, store.GetTeamMemberParams{
+		TeamID: teamUUID,
+		UserID: userUUID,
+	})
+
+	if err != nil {
+		return false, "", nil
+	}
+
+	return true, member.Role.String, nil
 }
