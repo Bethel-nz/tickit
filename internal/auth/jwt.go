@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/Bethel-nz/tickit/internal/env"
@@ -46,4 +47,29 @@ func ValidateJWT(tokenString string) (*Claims, error) {
 	} else {
 		return nil, errors.New("invalid JWT claims")
 	}
+}
+
+// GenerateToken creates a JWT token for the given user ID
+func GenerateToken(userID string) (string, error) {
+	claims := &Claims{
+		UserID: userID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "tickit-api",
+		},
+	}
+
+	// Create token with claims and sign with secret key
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(secretKey))
+}
+
+// Helper function to get token secret from environment or use a default
+func getTokenSecret() string {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		secret = env.String("JWT_SECRET", "super-secret-key-change-in-production", env.Optional).Get()
+	}
+	return secret
 }
