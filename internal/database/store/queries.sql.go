@@ -288,16 +288,12 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateU
 }
 
 const deleteComment = `-- name: DeleteComment :exec
-DELETE FROM comments WHERE id = $1 AND user_id = $2
+DELETE FROM comments
+WHERE id = $1
 `
 
-type DeleteCommentParams struct {
-	ID     pgtype.UUID
-	UserID pgtype.UUID
-}
-
-func (q *Queries) DeleteComment(ctx context.Context, arg DeleteCommentParams) error {
-	_, err := q.db.Exec(ctx, deleteComment, arg.ID, arg.UserID)
+func (q *Queries) DeleteComment(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteComment, id)
 	return err
 }
 
@@ -502,6 +498,61 @@ func (q *Queries) GetIssueByID(ctx context.Context, id pgtype.UUID) (Issue, erro
 	return i, err
 }
 
+const getIssueComments = `-- name: GetIssueComments :many
+SELECT c.id, c.content, c.user_id, c.issue_id, c.task_id, c.created_at, c.updated_at,
+       u.email, u.name, u.username, u.avatar_url
+FROM comments c
+JOIN users u ON c.user_id = u.id
+WHERE c.issue_id = $1
+ORDER BY c.created_at ASC
+`
+
+type GetIssueCommentsRow struct {
+	ID        pgtype.UUID
+	Content   string
+	UserID    pgtype.UUID
+	IssueID   pgtype.UUID
+	TaskID    pgtype.UUID
+	CreatedAt pgtype.Timestamp
+	UpdatedAt pgtype.Timestamp
+	Email     string
+	Name      pgtype.Text
+	Username  pgtype.Text
+	AvatarUrl pgtype.Text
+}
+
+func (q *Queries) GetIssueComments(ctx context.Context, issueID pgtype.UUID) ([]GetIssueCommentsRow, error) {
+	rows, err := q.db.Query(ctx, getIssueComments, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetIssueCommentsRow
+	for rows.Next() {
+		var i GetIssueCommentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.UserID,
+			&i.IssueID,
+			&i.TaskID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Email,
+			&i.Name,
+			&i.Username,
+			&i.AvatarUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getIssuesAssignedToUser = `-- name: GetIssuesAssignedToUser :many
 SELECT i.id, i.project_id, i.title, i.description, i.status, i.reporter_id, i.due_date, 
        i.created_at, i.updated_at, p.name AS project_name
@@ -556,11 +607,19 @@ func (q *Queries) GetIssuesAssignedToUser(ctx context.Context, assigneeID pgtype
 }
 
 const getIssuesByStatus = `-- name: GetIssuesByStatus :many
-SELECT issues.id, issues.project_id, issues.title, issues.description, issues.reporter_id, 
-       issues.assignee_id, issues.due_date, issues.created_at, issues.updated_at
-FROM issues
-WHERE issues.project_id = $1 AND issues.status = $2
-ORDER BY issues.created_at DESC
+SELECT 
+  i.id, 
+  i.project_id,  -- Make sure project_id is explicitly included
+  i.title, 
+  i.description, 
+  i.reporter_id,
+  i.assignee_id, 
+  i.due_date, 
+  i.created_at, 
+  i.updated_at
+FROM issues i
+WHERE i.project_id = $1 AND i.status = $2
+ORDER BY i.created_at DESC
 `
 
 type GetIssuesByStatusParams struct {
@@ -682,35 +741,34 @@ func (q *Queries) GetProjectByID(ctx context.Context, id pgtype.UUID) (Project, 
 }
 
 const getProjectIssues = `-- name: GetProjectIssues :many
-SELECT id, title, description, status, reporter_id, assignee_id, due_date, created_at, updated_at
-FROM issues
-WHERE project_id = $1
-ORDER BY created_at DESC
+SELECT 
+  i.id, 
+  i.project_id,
+  i.title, 
+  i.description, 
+  i.status, 
+  i.reporter_id,
+  i.assignee_id,
+  i.due_date, 
+  i.created_at, 
+  i.updated_at
+FROM issues i
+WHERE i.project_id = $1
+ORDER BY i.created_at DESC
 `
 
-type GetProjectIssuesRow struct {
-	ID          pgtype.UUID
-	Title       string
-	Description pgtype.Text
-	Status      pgtype.Text
-	ReporterID  pgtype.UUID
-	AssigneeID  pgtype.UUID
-	DueDate     pgtype.Timestamp
-	CreatedAt   pgtype.Timestamp
-	UpdatedAt   pgtype.Timestamp
-}
-
-func (q *Queries) GetProjectIssues(ctx context.Context, projectID pgtype.UUID) ([]GetProjectIssuesRow, error) {
+func (q *Queries) GetProjectIssues(ctx context.Context, projectID pgtype.UUID) ([]Issue, error) {
 	rows, err := q.db.Query(ctx, getProjectIssues, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetProjectIssuesRow
+	var items []Issue
 	for rows.Next() {
-		var i GetProjectIssuesRow
+		var i Issue
 		if err := rows.Scan(
 			&i.ID,
+			&i.ProjectID,
 			&i.Title,
 			&i.Description,
 			&i.Status,
@@ -819,7 +877,7 @@ func (q *Queries) GetProjectTasks(ctx context.Context, projectID pgtype.UUID) ([
 }
 
 const getProjectsByStatus = `-- name: GetProjectsByStatus :many
-SELECT id, name, description, owner_id, team_id, created_at, updated_at
+SELECT id, name, description, owner_id, team_id, created_at, updated_at , status
 FROM projects
 WHERE status = $1
 ORDER BY updated_at DESC
@@ -840,6 +898,7 @@ type GetProjectsByStatusRow struct {
 	TeamID      pgtype.UUID
 	CreatedAt   pgtype.Timestamp
 	UpdatedAt   pgtype.Timestamp
+	Status      pgtype.Text
 }
 
 func (q *Queries) GetProjectsByStatus(ctx context.Context, arg GetProjectsByStatusParams) ([]GetProjectsByStatusRow, error) {
@@ -859,6 +918,7 @@ func (q *Queries) GetProjectsByStatus(ctx context.Context, arg GetProjectsByStat
 			&i.TeamID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Status,
 		); err != nil {
 			return nil, err
 		}
@@ -1010,6 +1070,61 @@ func (q *Queries) GetTaskByID(ctx context.Context, id pgtype.UUID) (Task, error)
 	return i, err
 }
 
+const getTaskComments = `-- name: GetTaskComments :many
+SELECT c.id, c.content, c.user_id, c.issue_id, c.task_id, c.created_at, c.updated_at,
+       u.email, u.name, u.username, u.avatar_url
+FROM comments c
+JOIN users u ON c.user_id = u.id
+WHERE c.task_id = $1
+ORDER BY c.created_at ASC
+`
+
+type GetTaskCommentsRow struct {
+	ID        pgtype.UUID
+	Content   string
+	UserID    pgtype.UUID
+	IssueID   pgtype.UUID
+	TaskID    pgtype.UUID
+	CreatedAt pgtype.Timestamp
+	UpdatedAt pgtype.Timestamp
+	Email     string
+	Name      pgtype.Text
+	Username  pgtype.Text
+	AvatarUrl pgtype.Text
+}
+
+func (q *Queries) GetTaskComments(ctx context.Context, taskID pgtype.UUID) ([]GetTaskCommentsRow, error) {
+	rows, err := q.db.Query(ctx, getTaskComments, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTaskCommentsRow
+	for rows.Next() {
+		var i GetTaskCommentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.UserID,
+			&i.IssueID,
+			&i.TaskID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Email,
+			&i.Name,
+			&i.Username,
+			&i.AvatarUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getTasksByStatus = `-- name: GetTasksByStatus :many
 SELECT id, project_id, assignee_id, title, description, priority, due_date, created_at, updated_at
 FROM tasks
@@ -1064,6 +1179,37 @@ func (q *Queries) GetTasksByStatus(ctx context.Context, arg GetTasksByStatusPara
 	return items, nil
 }
 
+const getTeamAdmins = `-- name: GetTeamAdmins :many
+SELECT user_id, role
+FROM team_members
+WHERE team_id = $1 AND role = 'admin'
+`
+
+type GetTeamAdminsRow struct {
+	UserID pgtype.UUID
+	Role   pgtype.Text
+}
+
+func (q *Queries) GetTeamAdmins(ctx context.Context, teamID pgtype.UUID) ([]GetTeamAdminsRow, error) {
+	rows, err := q.db.Query(ctx, getTeamAdmins, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTeamAdminsRow
+	for rows.Next() {
+		var i GetTeamAdminsRow
+		if err := rows.Scan(&i.UserID, &i.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getTeamByID = `-- name: GetTeamByID :one
 SELECT id, name, description, avatar_url, created_at, updated_at
 FROM teams
@@ -1080,6 +1226,36 @@ func (q *Queries) GetTeamByID(ctx context.Context, id pgtype.UUID) (Team, error)
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTeamMember = `-- name: GetTeamMember :one
+SELECT team_id, user_id, role, created_at
+FROM team_members
+WHERE team_id = $1 AND user_id = $2
+`
+
+type GetTeamMemberParams struct {
+	TeamID pgtype.UUID
+	UserID pgtype.UUID
+}
+
+type GetTeamMemberRow struct {
+	TeamID    pgtype.UUID
+	UserID    pgtype.UUID
+	Role      pgtype.Text
+	CreatedAt pgtype.Timestamp
+}
+
+func (q *Queries) GetTeamMember(ctx context.Context, arg GetTeamMemberParams) (GetTeamMemberRow, error) {
+	row := q.db.QueryRow(ctx, getTeamMember, arg.TeamID, arg.UserID)
+	var i GetTeamMemberRow
+	err := row.Scan(
+		&i.TeamID,
+		&i.UserID,
+		&i.Role,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -1147,36 +1323,35 @@ func (q *Queries) GetTeamMembers(ctx context.Context, teamID pgtype.UUID) ([]Get
 }
 
 const getTeamProjects = `-- name: GetTeamProjects :many
-SELECT id, name, description, owner_id, status, created_at, updated_at
-FROM projects
-WHERE team_id = $1
-ORDER BY updated_at DESC
+SELECT 
+  p.id, 
+  p.name, 
+  p.description, 
+  p.owner_id,
+  p.team_id,  -- Make sure TeamID is explicitly included
+  p.status, 
+  p.created_at, 
+  p.updated_at
+FROM projects p
+WHERE p.team_id = $1
+ORDER BY p.created_at DESC
 `
 
-type GetTeamProjectsRow struct {
-	ID          pgtype.UUID
-	Name        string
-	Description pgtype.Text
-	OwnerID     pgtype.UUID
-	Status      pgtype.Text
-	CreatedAt   pgtype.Timestamp
-	UpdatedAt   pgtype.Timestamp
-}
-
-func (q *Queries) GetTeamProjects(ctx context.Context, teamID pgtype.UUID) ([]GetTeamProjectsRow, error) {
+func (q *Queries) GetTeamProjects(ctx context.Context, teamID pgtype.UUID) ([]Project, error) {
 	rows, err := q.db.Query(ctx, getTeamProjects, teamID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetTeamProjectsRow
+	var items []Project
 	for rows.Next() {
-		var i GetTeamProjectsRow
+		var i Project
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.Description,
 			&i.OwnerID,
+			&i.TeamID,
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -1731,6 +1906,22 @@ func (q *Queries) SearchEntities(ctx context.Context, arg SearchEntitiesParams) 
 	return items, nil
 }
 
+const updateComment = `-- name: UpdateComment :exec
+UPDATE comments
+SET content = $2, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateCommentParams struct {
+	ID      pgtype.UUID
+	Content string
+}
+
+func (q *Queries) UpdateComment(ctx context.Context, arg UpdateCommentParams) error {
+	_, err := q.db.Exec(ctx, updateComment, arg.ID, arg.Content)
+	return err
+}
+
 const updateCommentContent = `-- name: UpdateCommentContent :exec
 UPDATE comments
 SET content = $2, updated_at = now()
@@ -1908,7 +2099,7 @@ func (q *Queries) UpdateTeam(ctx context.Context, arg UpdateTeamParams) error {
 
 const updateTeamMemberRole = `-- name: UpdateTeamMemberRole :exec
 UPDATE team_members
-SET role = $3, updated_at = now()
+SET role = $3
 WHERE team_id = $1 AND user_id = $2
 `
 

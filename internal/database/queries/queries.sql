@@ -101,10 +101,20 @@ VALUES ($1, $2, $3);
 DELETE FROM team_members
 WHERE team_id = $1 AND user_id = $2;
 
+-- name: GetTeamMember :one
+SELECT team_id, user_id, role, created_at
+FROM team_members
+WHERE team_id = $1 AND user_id = $2;
+
 -- name: UpdateTeamMemberRole :exec
 UPDATE team_members
-SET role = $3, updated_at = now()
+SET role = $3
 WHERE team_id = $1 AND user_id = $2;
+
+-- name: GetTeamAdmins :many
+SELECT user_id, role
+FROM team_members
+WHERE team_id = $1 AND role = 'admin';
 
 -- name: GetTeamMembers :many
 SELECT u.id, u.email, u.name, u.username, u.avatar_url, tm.role
@@ -163,13 +173,21 @@ SET
 WHERE id = $1;
 
 -- name: GetTeamProjects :many
-SELECT id, name, description, owner_id, status, created_at, updated_at
-FROM projects
-WHERE team_id = $1
-ORDER BY updated_at DESC;
+SELECT 
+  p.id, 
+  p.name, 
+  p.description, 
+  p.owner_id,
+  p.team_id,  -- Make sure TeamID is explicitly included
+  p.status, 
+  p.created_at, 
+  p.updated_at
+FROM projects p
+WHERE p.team_id = $1
+ORDER BY p.created_at DESC;
 
 -- name: GetProjectsByStatus :many
-SELECT id, name, description, owner_id, team_id, created_at, updated_at
+SELECT id, name, description, owner_id, team_id, created_at, updated_at , status
 FROM projects
 WHERE status = $1
 ORDER BY updated_at DESC
@@ -194,10 +212,20 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, project_id, title, description, status, reporter_id, assignee_id, due_date, created_at, updated_at;
 
 -- name: GetProjectIssues :many
-SELECT id, title, description, status, reporter_id, assignee_id, due_date, created_at, updated_at
-FROM issues
-WHERE project_id = $1
-ORDER BY created_at DESC;
+SELECT 
+  i.id, 
+  i.project_id,
+  i.title, 
+  i.description, 
+  i.status, 
+  i.reporter_id,
+  i.assignee_id,
+  i.due_date, 
+  i.created_at, 
+  i.updated_at
+FROM issues i
+WHERE i.project_id = $1
+ORDER BY i.created_at DESC;
 
 -- name: UpdateIssueStatus :exec
 UPDATE issues
@@ -232,11 +260,19 @@ FROM issues
 WHERE id = $1;
 
 -- name: GetIssuesByStatus :many
-SELECT issues.id, issues.project_id, issues.title, issues.description, issues.reporter_id, 
-       issues.assignee_id, issues.due_date, issues.created_at, issues.updated_at
-FROM issues
-WHERE issues.project_id = $1 AND issues.status = $2
-ORDER BY issues.created_at DESC;
+SELECT 
+  i.id, 
+  i.project_id,  -- Make sure project_id is explicitly included
+  i.title, 
+  i.description, 
+  i.reporter_id,
+  i.assignee_id, 
+  i.due_date, 
+  i.created_at, 
+  i.updated_at
+FROM issues i
+WHERE i.project_id = $1 AND i.status = $2
+ORDER BY i.created_at DESC;
 
 -- name: GetRecentIssues :many
 SELECT i.id, i.project_id, i.title, i.status, i.due_date, p.name AS project_name
@@ -320,6 +356,32 @@ INSERT INTO comments (content, user_id, issue_id, task_id)
 VALUES ($1, $2, $3, $4)
 RETURNING id, content, user_id, issue_id, task_id, created_at, updated_at;
 
+
+-- name: GetIssueComments :many
+SELECT c.id, c.content, c.user_id, c.issue_id, c.task_id, c.created_at, c.updated_at,
+       u.email, u.name, u.username, u.avatar_url
+FROM comments c
+JOIN users u ON c.user_id = u.id
+WHERE c.issue_id = $1
+ORDER BY c.created_at ASC;
+
+-- name: GetTaskComments :many
+SELECT c.id, c.content, c.user_id, c.issue_id, c.task_id, c.created_at, c.updated_at,
+       u.email, u.name, u.username, u.avatar_url
+FROM comments c
+JOIN users u ON c.user_id = u.id
+WHERE c.task_id = $1
+ORDER BY c.created_at ASC;
+
+-- name: UpdateComment :exec
+UPDATE comments
+SET content = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: DeleteComment :exec
+DELETE FROM comments
+WHERE id = $1;
+
 -- name: GetCommentsByIssue :many
 SELECT c.id, c.content, c.user_id, c.created_at, c.updated_at, 
        u.name AS user_name, u.username, u.avatar_url
@@ -341,8 +403,6 @@ UPDATE comments
 SET content = $2, updated_at = now()
 WHERE id = $1 AND user_id = $3;
 
--- name: DeleteComment :exec
-DELETE FROM comments WHERE id = $1 AND user_id = $2;
 
 -- name: GetCommentByID :one
 SELECT id, content, user_id, issue_id, task_id, created_at, updated_at

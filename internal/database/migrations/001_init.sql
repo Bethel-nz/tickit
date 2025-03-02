@@ -52,7 +52,7 @@ CREATE TABLE projects (
     description TEXT,
     owner_id UUID NOT NULL REFERENCES users(id),
     team_id UUID REFERENCES teams(id),
-    status VARCHAR(15) DEFAULT 'active' CHECK (status IN ('active', 'archived', 'completed')),
+    status VARCHAR(15) DEFAULT 'planned' CHECK (status IN ('planned', 'active', 'completed', 'on_hold', 'cancelled', 'archived')),
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now()
 );
