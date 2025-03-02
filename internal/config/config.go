@@ -10,7 +10,7 @@ import (
 // LoadConfig reads environment variables and returns a populated AppConfig.
 func LoadConfig() *types.AppConfig {
 	return &types.AppConfig{
-		DatabaseURL:    env.String("DATABASE_URL", "postgres://user:pass@localhost:5432/yourdb?sslmode=disable", env.Require).Get(),
+		DatabaseURL:    env.String("DATABASE_URL", "postgres://admin:adminpassword@db:5432/tickit?sslmode=disable", env.Require).Get(),
 		AppPort:        env.Int("APP_PORT", 5479, env.Optional).Get(),
 		DebugMode:      env.Bool("DEBUG_MODE", false, env.Optional).Get(),
 		RequestTimeout: env.Duration("REQUEST_TIMEOUT", 5*time.Second, env.Optional).Get(),
