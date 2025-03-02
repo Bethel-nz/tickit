@@ -1,16 +1,24 @@
-FROM golang:1.24
+FROM golang:1.24-alpine
 
 WORKDIR /app
 
-# Install Air
-RUN go install github.com/cosmtrek/air@v1.16.1
+# Install build & runtime dependencies
+RUN apk add --no-cache git postgresql-client ca-certificates curl make
 
+# Install golang-migrate
+RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+RUN go install github.com/cosmtrek/air@latest
+
+# Copy go.mod and go.sum first to leverage Docker cache
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the rest of the application
 COPY . .
 
-# Install dependencies
-RUN go mod download
+# Make the entrypoint script executable
+RUN chmod +x /app/scripts/init/00-init.sh
 
 EXPOSE 5749
 
-# Run air
 CMD ["air", "-c", ".air.toml"]
