@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-func loggerMiddleware(next http.Handler) http.Handler {
+func LoggerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("---> %s %s HTTP/%d.%d\n",
 			r.Method,
@@ -17,7 +17,7 @@ func loggerMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func recovererMiddleware(next http.Handler) http.Handler {
+func RecovererMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
@@ -29,7 +29,7 @@ func recovererMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
+func CorsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -44,7 +44,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func rateLimit(next http.Handler) http.Handler {
+func RateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		//TODO: Add rate limiting logic here
 		next.ServeHTTP(w, r)

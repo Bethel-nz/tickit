@@ -4,36 +4,51 @@ import (
 	"net/http"
 
 	"github.com/Bethel-nz/tickit/internal/database/store"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// OwnershipMiddleware ensures that the authenticated user owns the project.
-// It expects the project id to be provided as a URL query parameter "project_id".
-func OwnershipMiddleware(queries *store.Queries, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := r.Context().Value(UserIDKey).(string)
+// NewOwnershipMiddleware creates a middleware that ensures the authenticated user owns the project.
+// This follows the standard middleware pattern used in the router.
+func NewOwnershipMiddleware(queries *store.Queries) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		if !ok || userID == "" {
-			http.Error(w, "Unauthorized: user not found in context", http.StatusUnauthorized)
-			return
-		}
+			projectID := r.PathValue("id")
+			if projectID == "" {
+				http.Error(w, "Missing project ID", http.StatusBadRequest)
+				return
+			}
 
-		projectID := r.URL.Query().Get("project_id")
-		if projectID == "" {
-			http.Error(w, "Bad Request: missing project_id", http.StatusBadRequest)
-			return
-		}
+			userID := r.Context().Value("user_id").(string)
+			if userID == "" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
 
-		project, err := queries.GetProject(r.Context(), projectID)
-		if err != nil {
-			http.Error(w, "Project not found", http.StatusNotFound)
-			return
-		}
+			var scannedUserId pgtype.UUID
+			if err := scannedUserId.Scan(userID); err != nil {
+				http.Error(w, "Invalid User ID format", http.StatusBadRequest)
+				return
+			}
 
-		if project.OwnerID != userID {
-			http.Error(w, "Forbidden: you are not the owner of this project", http.StatusForbidden)
-			return
-		}
+			var scannedProjectId pgtype.UUID
+			if err := scannedProjectId.Scan(projectID); err != nil {
+				http.Error(w, "Invalid Project ID format", http.StatusBadRequest)
+				return
+			}
 
-		next.ServeHTTP(w, r)
-	})
+			project, err := queries.GetProjectByID(r.Context(), scannedProjectId)
+			if err != nil {
+				http.Error(w, "Project not found", http.StatusNotFound)
+				return
+			}
+
+			if project.OwnerID != scannedUserId {
+				http.Error(w, "Forbidden: you are not the owner of this project", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
