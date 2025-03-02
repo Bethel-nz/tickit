@@ -34,6 +34,15 @@ func (c *Context) JSON(status int, v interface{}) {
 	}
 }
 
+// Status sends a response with the specified status code and an optional message
+func (c *Context) Status(code int, message ...string) {
+	c.WriteHeader(code)
+	if len(message) > 0 {
+		c.Header().Set("Content-Type", "text/plain")
+		c.Write([]byte(message[0]))
+	}
+}
+
 // Pattern represents a route pattern split into segments
 type Pattern struct {
 	segments []string
