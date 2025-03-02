@@ -9,7 +9,6 @@ import (
 
 // setupRoutes configures all application routes
 func setupRoutes(r *router.RouterGroup, queries *store.Queries) {
-	// Create middleware instances that require dependencies
 	ownershipMiddleware := middleware.NewOwnershipMiddleware(queries)
 
 	// User routes
@@ -27,6 +26,9 @@ func setupRoutes(r *router.RouterGroup, queries *store.Queries) {
 	authenticated.PUT("/me", handlers.UpdateUserProfile)
 	authenticated.POST("/change-password", handlers.ChangePassword)
 	authenticated.DELETE("/me", handlers.DeleteAccount)
+
+	// Search route - accessible to authenticated users
+	r.GET("/search", handlers.SearchEntities, middleware.AuthMiddleware)
 
 	// Project routes
 	projects := r.Group("/projects", middleware.AuthMiddleware)
