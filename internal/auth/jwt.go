@@ -3,7 +3,6 @@ package auth
 import (
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/Bethel-nz/tickit/internal/env"
@@ -57,13 +56,4 @@ func ValidateJWT(tokenString string) (*Claims, error) {
 // Consider deprecating this in favor of GenerateToken for consistency
 func GenerateJWT(userID string) (string, error) {
 	return GenerateToken(userID)
-}
-
-// Helper function to get token secret from environment or use a default
-func getTokenSecret() string {
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = env.String("JWT_SECRET", "super-secret-key-change-in-production", env.Optional).Get()
-	}
-	return secret
 }
