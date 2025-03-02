@@ -17,20 +17,24 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func GenerateJWT(userID string) (string, error) {
-	claims := Claims{
+// GenerateToken creates a JWT token for the given user ID
+// This is the primary JWT generation function to use
+func GenerateToken(userID string) (string, error) {
+	claims := &Claims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    "your-issuer",
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "tickit-api",
 		},
 	}
 
+	// Create token with claims and sign with secret key
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secretKey))
 }
 
+// ValidateJWT validates a JWT token and returns the claims if valid
 func ValidateJWT(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -49,20 +53,10 @@ func ValidateJWT(tokenString string) (*Claims, error) {
 	}
 }
 
-// GenerateToken creates a JWT token for the given user ID
-func GenerateToken(userID string) (string, error) {
-	claims := &Claims{
-		UserID: userID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "tickit-api",
-		},
-	}
-
-	// Create token with claims and sign with secret key
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(secretKey))
+// GenerateJWT is an alias for GenerateToken for backward compatibility
+// Consider deprecating this in favor of GenerateToken for consistency
+func GenerateJWT(userID string) (string, error) {
+	return GenerateToken(userID)
 }
 
 // Helper function to get token secret from environment or use a default
