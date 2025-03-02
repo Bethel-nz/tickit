@@ -44,7 +44,7 @@ func (s *SearchService) SearchEntities(ctx context.Context, userID, query string
 	}
 
 	if limit <= 0 {
-		limit = 20 // Default limit
+		limit = 20
 	}
 
 	var userUUID pgtype.UUID
@@ -52,7 +52,6 @@ func (s *SearchService) SearchEntities(ctx context.Context, userID, query string
 		return nil, fmt.Errorf("invalid user ID: %w", err)
 	}
 
-	// Create text type for query
 	var queryText pgtype.Text
 	if err := queryText.Scan(query); err != nil {
 		return nil, fmt.Errorf("invalid query format: %w", err)
