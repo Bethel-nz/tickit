@@ -18,7 +18,7 @@ type Validator struct {
 
 // Common regular expressions for validation
 var (
-	URLRx   = regexp.MustCompile(`^(http|https)://[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})*(:[0-9]{1,5})?(/[-a-zA-Z0-9(%_+.~=#;:,]*)?)?(#[a-zA-Z0-9(%_+.~=#;:,]*)?)?`)
+	URLRx   = regexp.MustCompile(`^(http|https)://[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})*(:[0-9]{1,5})?(/[-a-zA-Z0-9(%_+.~=#;:,\\*)]*)?(#[a-zA-Z0-9(%_+.~=#;:,\\*)]*)?`)
 	EmailRX = regexp.MustCompile(`^[a-zA-Z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
 	DateRx  = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 	TimeRx  = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$`)
