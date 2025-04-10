@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -97,6 +98,9 @@ type TLSServer struct {
 // WithTLS configures the application to use TLS with the provided tls.Config.
 // It returns a TLSServer, which can only chain with Serve.
 func (app *Application) WithTLS(cfg *tls.Config) *TLSServer {
+	if cfg == nil || len(cfg.Certificates) == 0 {
+		log.Fatal("TLS configuration must include at least one certificate")
+	}
 	app.tlsConfig = cfg
 	return &TLSServer{app: app}
 }
@@ -108,8 +112,8 @@ func (app *Application) Serve() error {
 	server := &http.Server{
 		Addr:         ":" + strconv.Itoa(app.Config.AppPort),
 		Handler:      app.Mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  app.Config.ServerReadTimeout,
+		WriteTimeout: app.Config.ServerWriteTimeout,
 	}
 
 	// If tlsConfig is set, use it; otherwise, default to HTTP
@@ -149,20 +153,23 @@ func (app *Application) Serve() error {
 		log.Println("Shutdown completed")
 	}
 
+	var shutdownErr error
+
 	if app.DB != nil {
 		app.DB.Close()
 	}
 
 	if app.Cache != nil {
 		if err := app.Cache.Close(); err != nil {
-			log.Printf("Error closing cache: %v", err)
+			shutdownErr = fmt.Errorf("cache close error: %v", err)
 		}
 	}
 
-	return nil
+	return shutdownErr
 }
 
 // Serve for TLSServer ensures TLS is used (reuses Application's Serve logic).
 func (ts *TLSServer) Serve() error {
+
 	return ts.app.Serve()
 }
