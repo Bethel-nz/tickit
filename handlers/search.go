@@ -20,6 +20,10 @@ func SetSearchService(service *services.SearchService) {
 
 // SearchEntities performs a search across multiple entity types
 func SearchEntities(c *router.Context) {
+	if searchService == nil {
+		c.Status(http.StatusInternalServerError, "Search service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
