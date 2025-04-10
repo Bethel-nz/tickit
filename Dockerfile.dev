@@ -3,11 +3,13 @@ FROM golang:1.24-alpine
 WORKDIR /app
 
 # Install build & runtime dependencies
-RUN apk add --no-cache git postgresql-client ca-certificates curl make
+RUN apk add --no-cache git postgresql16-client ca-certificates curl make
 
 # Install golang-migrate
 RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-RUN go install github.com/cosmtrek/air@latest
+
+# Install air from new location
+RUN go install github.com/air-verse/air@latest
 
 # Copy go.mod and go.sum first to leverage Docker cache
 COPY go.mod go.sum ./
@@ -16,8 +18,15 @@ RUN go mod download
 # Copy the rest of the application
 COPY . .
 
-# Make the entrypoint script executable
-RUN chmod +x /app/scripts/init/00-init.sh
+RUN ls -la
+
+# Make the entrypoint script executable using a relative path
+# RUN chmod +x scripts/init/00-init.sh
+
+# RUN  bash -c "scripts/init/00-init.sh"
+
+
+RUN echo "Starting Air..."
 
 EXPOSE 5749
 
