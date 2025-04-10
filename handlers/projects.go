@@ -36,6 +36,10 @@ type UpdateProjectRequest struct {
 
 // ListProjects returns all projects accessible to the authenticated user
 func ListProjects(c *router.Context) {
+	if projectService == nil {
+		c.Status(http.StatusInternalServerError, "Project service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -81,6 +85,10 @@ func ListProjects(c *router.Context) {
 
 // CreateProject creates a new project
 func CreateProject(c *router.Context) {
+	if projectService == nil {
+		c.Status(http.StatusInternalServerError, "Project service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -125,6 +133,10 @@ func CreateProject(c *router.Context) {
 
 // GetProject returns a specific project by ID
 func GetProject(c *router.Context) {
+	if projectService == nil {
+		c.Status(http.StatusInternalServerError, "Project service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -150,6 +162,10 @@ func GetProject(c *router.Context) {
 
 // UpdateProject updates a project's details
 func UpdateProject(c *router.Context) {
+	if projectService == nil {
+		c.Status(http.StatusInternalServerError, "Project service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -198,6 +214,10 @@ func UpdateProject(c *router.Context) {
 
 // DeleteProject deletes a project
 func DeleteProject(c *router.Context) {
+	if projectService == nil {
+		c.Status(http.StatusInternalServerError, "Project service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
