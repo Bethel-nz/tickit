@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -30,7 +31,10 @@ func (c *Context) JSON(status int, v interface{}) {
 	c.Header().Set("Content-Type", "application/json")
 	c.WriteHeader(status)
 	if err := json.NewEncoder(c).Encode(v); err != nil {
-		http.Error(c, err.Error(), http.StatusInternalServerError)
+		log.Printf("Failed to encode JSON response: %v", err)
+		if status < 400 {
+			c.Write([]byte(`{"error": "Internal server error during response encoding"}`))
+		}
 	}
 }
 
@@ -143,22 +147,28 @@ func (rg *RouterGroup) Handle(method, path string, handler func(*Context), middl
 }
 
 // HTTP Method Helpers
+
+// GET registers a GET route. For overlapping paths with the same method, the first registered route takes precedence
 func (rg *RouterGroup) GET(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("GET", path, handler, middleware...)
 }
 
+// POST registers a POST route
 func (rg *RouterGroup) POST(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("POST", path, handler, middleware...)
 }
 
+// PUT registers a PUT route
 func (rg *RouterGroup) PUT(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("PUT", path, handler, middleware...)
 }
 
+// DELETE registers a DELETE route
 func (rg *RouterGroup) DELETE(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("DELETE", path, handler, middleware...)
 }
 
+// PATCH registers a PATCH route
 func (rg *RouterGroup) PATCH(path string, handler func(*Context), middleware ...func(http.Handler) http.Handler) *RouterGroup {
 	return rg.Handle("PATCH", path, handler, middleware...)
 }
@@ -208,16 +218,26 @@ func (t *Trie) Insert(route *Route) {
 					routes:         make(map[string]*Route),
 				}
 				node.staticChildren[seg] = child
-				node = child
 			}
+			node = node.staticChildren[seg]
 		}
 	}
-	node.routes[route.Method] = route
+	if _, ok := node.routes[route.Method]; !ok {
+		node.routes[route.Method] = route
+	}
 }
 
 // Match finds a matching route for a method and path
 func (t *Trie) Match(method, path string) (*Route, []string, bool) {
-	segments := strings.Split(strings.Trim(path, "/"), "/")
+	normalizedPath := strings.Trim(path, "/")
+	if normalizedPath == "" {
+		if route, ok := t.root.routes[method]; ok {
+			return route, []string{}, true
+		}
+		return nil, nil, false
+	}
+	segments := strings.Split(normalizedPath, "/")
+
 	if path == "/" && len(segments) == 1 && segments[0] == "" {
 		segments = []string{}
 	}
@@ -293,14 +313,12 @@ func (t *Trie) Match(method, path string) (*Route, []string, bool) {
 // Build flattens the router group into a list of routes
 func (rg *RouterGroup) Build() []Route {
 	routes := rg.buildRoutes(nil)
-
 	// Sort routes by literal count (descending) for precedence
 	sort.Slice(routes, func(i, j int) bool {
 		countI := routes[i].Pattern.LiteralCount()
 		countJ := routes[j].Pattern.LiteralCount()
 		return countI > countJ
 	})
-
 	return routes
 }
 
