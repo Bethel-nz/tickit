@@ -46,6 +46,18 @@ func setupRoutes(r *router.RouterGroup, queries *store.Queries) {
 	tickets.PUT("/{id}", handlers.UpdateTicket)
 	tickets.DELETE("/{id}", handlers.DeleteTicket)
 	tickets.POST("/{id}/assign", handlers.AssignTicket)
+
+	// Comments under tickets (issues)
+	comments := tickets.Group("/{ticket_id}/comments")
+	comments.GET("/", handlers.ListComments)
+	comments.POST("/", handlers.CreateComment)
+	comments.PUT("/{id}", handlers.UpdateComment)    // Ownership handled by service
+	comments.DELETE("/{id}", handlers.DeleteComment) // Ownership handled by service
+
+	// Optional: If you have a separate tasks endpoint
+	tasks := projects.Group("/{project_id}/tasks")
+	tasks.GET("/{task_id}/comments", handlers.ListComments)
+	tasks.POST("/{task_id}/comments", handlers.CreateComment)
 }
 
 // setupMainRoutes configures main application routes
