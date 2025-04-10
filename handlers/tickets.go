@@ -32,6 +32,10 @@ type TicketRequest struct {
 
 // ListTickets returns all tickets for a project
 func ListTickets(c *router.Context) {
+	if issueService == nil {
+		c.Status(http.StatusInternalServerError, "Issue service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -69,6 +73,10 @@ func ListTickets(c *router.Context) {
 
 // CreateTicket creates a new ticket
 func CreateTicket(c *router.Context) {
+	if issueService == nil {
+		c.Status(http.StatusInternalServerError, "Issue service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -149,6 +157,10 @@ func CreateTicket(c *router.Context) {
 
 // GetTicket returns a specific ticket
 func GetTicket(c *router.Context) {
+	if issueService == nil {
+		c.Status(http.StatusInternalServerError, "Issue service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -172,6 +184,10 @@ func GetTicket(c *router.Context) {
 
 // UpdateTicket updates an existing ticket
 func UpdateTicket(c *router.Context) {
+	if issueService == nil {
+		c.Status(http.StatusInternalServerError, "Issue service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -228,6 +244,10 @@ func UpdateTicket(c *router.Context) {
 
 // DeleteTicket deletes a ticket
 func DeleteTicket(c *router.Context) {
+	if issueService == nil {
+		c.Status(http.StatusInternalServerError, "Issue service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -250,6 +270,10 @@ func DeleteTicket(c *router.Context) {
 
 // AssignTicket assigns a ticket to a user
 func AssignTicket(c *router.Context) {
+	if issueService == nil {
+		c.Status(http.StatusInternalServerError, "Issue service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
