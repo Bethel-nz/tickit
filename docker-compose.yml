@@ -34,13 +34,15 @@ services:
       # JWT configuration
       - TICKIT_JWT_KEY=tick_#$%_it
       - JWT_SECRET=tick_#$%_it
-
-    entrypoint: ['/app/scripts/init/00-init.sh']
     networks:
       - backend
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_started
+        required: true
+      migrate:
+        condition: service_started
+        required: true
       redis:
         condition: service_started
 
@@ -63,6 +65,24 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    working_dir: /app
+    image: migrate/migrate
+    volumes:
+      - ./internal/database/migrations:/migrations
+    depends_on:
+      db:
+        condition: service_started
+    command:
+      [
+        '-path',
+        '/internal/database/migrations',
+        '-database',
+        'postgres://admin:adminpassword@db:5432/tickit?sslmode=disable',
+        'up',
+        '3',
+      ]
+
   redis:
     image: redis:8.0-M02-alpine
     restart: unless-stopped
@@ -72,18 +92,6 @@ services:
     command: redis-server --save 60 1 --loglevel warning
     networks:
       - backend
-
-  redis-commander:
-    container_name: redis-commander
-    hostname: redis-commander
-    image: rediscommander/redis-commander:latest
-    environment:
-      - REDIS_HOST=redis
-    ports:
-      - '127.0.0.1:8081:8081'
-    depends_on:
-      - redis
-    restart: unless-stopped
 
 volumes:
   db-data:
