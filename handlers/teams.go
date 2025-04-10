@@ -35,6 +35,10 @@ type TeamMemberRequest struct {
 
 // ListTeams returns all teams a user is a member of
 func ListTeams(c *router.Context) {
+	if teamService == nil {
+		c.Status(http.StatusInternalServerError, "Team service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -55,6 +59,10 @@ func ListTeams(c *router.Context) {
 
 // CreateTeam creates a new team
 func CreateTeam(c *router.Context) {
+	if teamService == nil {
+		c.Status(http.StatusInternalServerError, "Team service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -92,6 +100,10 @@ func CreateTeam(c *router.Context) {
 
 // GetTeam returns a specific team
 func GetTeam(c *router.Context) {
+	if teamService == nil {
+		c.Status(http.StatusInternalServerError, "Team service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -115,6 +127,10 @@ func GetTeam(c *router.Context) {
 
 // UpdateTeam updates a team
 func UpdateTeam(c *router.Context) {
+	if teamService == nil {
+		c.Status(http.StatusInternalServerError, "Team service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -158,6 +174,10 @@ func UpdateTeam(c *router.Context) {
 
 // DeleteTeam deletes a team
 func DeleteTeam(c *router.Context) {
+	if teamService == nil {
+		c.Status(http.StatusInternalServerError, "Team service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -180,6 +200,10 @@ func DeleteTeam(c *router.Context) {
 
 // AddTeamMember adds a user to a team
 func AddTeamMember(c *router.Context) {
+	if teamService == nil {
+		c.Status(http.StatusInternalServerError, "Team service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -219,6 +243,10 @@ func AddTeamMember(c *router.Context) {
 
 // RemoveTeamMember removes a user from a team
 func RemoveTeamMember(c *router.Context) {
+	if teamService == nil {
+		c.Status(http.StatusInternalServerError, "Team service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -249,6 +277,10 @@ func RemoveTeamMember(c *router.Context) {
 
 // ListTeamMembers returns all members of a team
 func ListTeamMembers(c *router.Context) {
+	if teamService == nil {
+		c.Status(http.StatusInternalServerError, "Team service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
