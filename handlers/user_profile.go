@@ -12,6 +12,10 @@ import (
 
 // GetUserProfile returns the authenticated user's profile
 func GetUserProfile(c *router.Context) {
+	if userService == nil {
+		c.Status(http.StatusInternalServerError, "User service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")
@@ -33,6 +37,10 @@ func GetUserProfile(c *router.Context) {
 
 // UpdateUserProfile updates the authenticated user's profile
 func UpdateUserProfile(c *router.Context) {
+	if userService == nil {
+		c.Status(http.StatusInternalServerError, "User service not initialized")
+		return
+	}
 	// Get user ID from context
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -64,6 +72,10 @@ func UpdateUserProfile(c *router.Context) {
 
 // ChangePassword handles password change for authenticated users
 func ChangePassword(c *router.Context) {
+	if userService == nil {
+		c.Status(http.StatusInternalServerError, "User service not initialized")
+		return
+	}
 	// Get user ID from context
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -105,6 +117,10 @@ func ChangePassword(c *router.Context) {
 
 // DeleteAccount handles account deletion for authenticated users
 func DeleteAccount(c *router.Context) {
+	if userService == nil {
+		c.Status(http.StatusInternalServerError, "User service not initialized")
+		return
+	}
 	userID, ok := c.Request.Context().Value(middleware.UserIDKey).(string)
 	if !ok || userID == "" {
 		c.Status(http.StatusUnauthorized, "User not authenticated")

@@ -47,6 +47,10 @@ type ResetPasswordRequest struct {
 
 // RegisterUser handles user registration
 func RegisterUser(c *router.Context) {
+	if userService == nil {
+		c.Status(http.StatusInternalServerError, "User service not initialized")
+		return
+	}
 	var req RegisterRequest
 	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
 		c.Status(http.StatusBadRequest, "Invalid request format")
@@ -90,6 +94,10 @@ func RegisterUser(c *router.Context) {
 
 // LoginUser handles user login
 func LoginUser(c *router.Context) {
+	if userService == nil {
+		c.Status(http.StatusInternalServerError, "User service not initialized")
+		return
+	}
 	var req LoginRequest
 	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
 		c.Status(http.StatusBadRequest, "Invalid request format")
@@ -135,6 +143,10 @@ func LoginUser(c *router.Context) {
 
 // ForgotPassword initiates password reset
 func ForgotPassword(c *router.Context) {
+	if userService == nil {
+		c.Status(http.StatusInternalServerError, "User service not initialized")
+		return
+	}
 	var req ForgotPasswordRequest
 	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
 		c.Status(http.StatusBadRequest, "Invalid request format")
@@ -162,6 +174,10 @@ func ForgotPassword(c *router.Context) {
 
 // ResetPassword completes password reset with token
 func ResetPassword(c *router.Context) {
+	if userService == nil {
+		c.Status(http.StatusInternalServerError, "User service not initialized")
+		return
+	}
 	// Get token from URL parameter
 	token := c.Param("token")
 	if token == "" {
