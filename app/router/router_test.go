@@ -272,4 +272,129 @@ func TestRouter(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("Trailing slash handling", func(t *testing.T) {
+		rg := NewRouter()
+		rg.GET("/users/{id}", func(c *Context) {
+			c.Write([]byte(c.Param("id")))
+		})
+
+		req := httptest.NewRequest("GET", "/users/123/", nil)
+		rr := httptest.NewRecorder()
+		ServeMux(rg).ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("handler returned wrong status: got %v want %v", rr.Code, http.StatusOK)
+		}
+		if rr.Body.String() != "123" {
+			t.Errorf("handler returned unexpected body: got %v want %v", rr.Body.String(), "123")
+		}
+	})
+
+	t.Run("Root path", func(t *testing.T) {
+		rg := NewRouter()
+		rg.GET("/", func(c *Context) {
+			c.Write([]byte("root"))
+		})
+
+		req := httptest.NewRequest("GET", "/", nil)
+		rr := httptest.NewRecorder()
+		ServeMux(rg).ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("handler returned wrong status: got %v want %v", rr.Code, http.StatusOK)
+		}
+		if rr.Body.String() != "root" {
+			t.Errorf("handler returned unexpected body: got %v want %v", rr.Body.String(), "root")
+		}
+	})
+
+	t.Run("Same path different methods", func(t *testing.T) {
+		rg := NewRouter()
+		rg.GET("/users", func(c *Context) {
+			c.Write([]byte("get"))
+		})
+		rg.POST("/users", func(c *Context) {
+			c.Write([]byte("post"))
+		})
+
+		reqGet := httptest.NewRequest("GET", "/users", nil)
+		rrGet := httptest.NewRecorder()
+		ServeMux(rg).ServeHTTP(rrGet, reqGet)
+		if rrGet.Code != http.StatusOK || rrGet.Body.String() != "get" {
+			t.Errorf("GET failed: status %v, body %v", rrGet.Code, rrGet.Body.String())
+		}
+
+		reqPost := httptest.NewRequest("POST", "/users", nil)
+		rrPost := httptest.NewRecorder()
+		ServeMux(rg).ServeHTTP(rrPost, reqPost)
+		if rrPost.Code != http.StatusOK || rrPost.Body.String() != "post" {
+			t.Errorf("POST failed: status %v, body %v", rrPost.Code, rrPost.Body.String())
+		}
+	})
+
+	t.Run("Overlapping_parameterized_routes", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			register func(*RouterGroup)
+			expected string
+		}{
+			{
+				name: "id first",
+				register: func(rg *RouterGroup) {
+					rg.GET("/users/{id}", func(c *Context) {
+						c.Write([]byte("id:" + c.Param("id")))
+					})
+					rg.GET("/users/{name}", func(c *Context) {
+						c.Write([]byte("name:" + c.Param("name")))
+					})
+				},
+				expected: "id:123",
+			},
+			{
+				name: "name first",
+				register: func(rg *RouterGroup) {
+					rg.GET("/users/{name}", func(c *Context) {
+						c.Write([]byte("name:" + c.Param("name")))
+					})
+					rg.GET("/users/{id}", func(c *Context) {
+						c.Write([]byte("id:" + c.Param("id")))
+					})
+				},
+				expected: "name:123",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				rg := NewRouter()
+				tt.register(rg)
+				req := httptest.NewRequest("GET", "/users/123", nil)
+				rr := httptest.NewRecorder()
+				ServeMux(rg).ServeHTTP(rr, req)
+				if rr.Body.String() != tt.expected {
+					t.Errorf("handler returned unexpected body: got %v want %v", rr.Body.String(), tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("Middleware short-circuit", func(t *testing.T) {
+		rg := NewRouter()
+		rg.GET("/test", func(c *Context) {
+			t.Error("Handler should not be called")
+		}, func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+			})
+		})
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		rr := httptest.NewRecorder()
+		ServeMux(rg).ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("handler returned wrong status: got %v want %v", rr.Code, http.StatusForbidden)
+		}
+	})
 }
